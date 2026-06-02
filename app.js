@@ -1,556 +1,891 @@
-/* Inspector de Parches Pro v10
-   Enfoque: iPhone analiza, PC monitorea/controla. Tarjeta 7x7/5x5 como patrón de calibración.
-*/
+/* Inspector de Parches Pro v11
+   Base: la versión v9 que detectaba mejor.
+   Mejoras v11: monitor PC en vivo por código, control remoto, overlays reales y medición Base a Texto.
+   Sin OCR. El texto se mide como bloque visual. */
+
 const $ = id => document.getElementById(id);
 const video = $('video');
 const overlay = $('overlay');
 const octx = overlay.getContext('2d');
 const capture = $('captureCanvas');
 const capCtx = capture.getContext('2d', { willReadFrequently: true });
-const debugCanvas = $('debugCanvas');
-const dctx = debugCanvas.getContext('2d', { willReadFrequently: true });
-
-const APP_VERSION = '10.0';
-const OUTER_MM = 70;
-const INNER_MM = 50;
-const WARP_SIZE = 700;
-const PX_PER_MM = WARP_SIZE / OUTER_MM; // 10 px/mm
-const PEER_PREFIX = 'mardur-inspector-v10-';
+const workCanvas = $('workCanvas');
+const workCtx = workCanvas.getContext('2d', { willReadFrequently: true });
 
 let stream = null;
 let devices = [];
 let currentDeviceIndex = -1;
+let usingPhoto = false;
 let autoMode = false;
 let lastAutoTs = 0;
-let lastSendDebugTs = 0;
-let stableCandidate = null;
-let calibration = JSON.parse(localStorage.getItem('v10_calibration') || 'null');
-let reference = JSON.parse(localStorage.getItem('v10_reference') || 'null');
-let log = JSON.parse(localStorage.getItem('v10_log') || '[]');
-let lastAnalysisKey = '';
-let lockedUntilEmpty = false;
+let lastLoggedSignature = '';
+let peer = null, monitorConn = null, monitorCall = null;
+const PEER_PREFIX = 'mardur-inspector-v11-';
 
-let peer = null;
-let pcConn = null;
-let pcCode = new URLSearchParams(location.search).get('code') || '';
-if (pcCode) $('pairCode').value = pcCode.toUpperCase();
+const STORE_KEYS = {
+  cal: 'ip_v11_calibration',
+  ref: 'ip_v11_reference',
+  log: 'ip_v11_log'
+};
 
-function toast(msg){ const t=$('toast'); t.textContent=msg; t.classList.add('show'); clearTimeout(toast._t); toast._t=setTimeout(()=>t.classList.remove('show'),2200); }
-function setBadge(text, cls='idle'){ $('statusBadge').textContent=text; $('statusBadge').className='badge '+cls; }
-function setStep(id, state, msg){ const el=$(id); el.className='step '+(state||'pending'); if(msg) el.querySelector('em').textContent=msg; }
+let calibration = safeParse(localStorage.getItem(STORE_KEYS.cal), null);
+let reference = safeParse(localStorage.getItem(STORE_KEYS.ref), null);
+let log = safeParse(localStorage.getItem(STORE_KEYS.log), []);
+let lastAnalysis = null;
+let lastDebug = {};
+
+const CARD = { OUTER_MM: 70, INNER_MM: 50, WARP_PX: 700, INNER_START: 100, INNER_END: 600 };
+
+init();
+
+function init(){
+  bindUI();
+  renderLog();
+  renderCalibrationState();
+  renderReferenceState();
+  waitForOpenCV();
+  resizeOverlay();
+  window.addEventListener('resize', resizeOverlay);
+
+  const params = new URLSearchParams(location.search);
+  const code = params.get('code');
+  if(code){
+    $('monitorId').value = code.toUpperCase();
+    toast('Código PC recibido. Inicia cámara y conecta PC.');
+  }
+}
+
+function bindUI(){
+  $('btnStart').onclick = startCamera;
+  $('btnSwitchCam').onclick = switchCamera;
+  $('btnDetectCard').onclick = () => calibrateFromCard(true);
+  $('btnRecalibrate').onclick = () => { calibration=null; localStorage.removeItem(STORE_KEYS.cal); renderCalibrationState(); toast('Calibración borrada'); };
+  $('btnSaveReference').onclick = saveReference;
+  $('btnClearReference').onclick = () => { reference=null; localStorage.removeItem(STORE_KEYS.ref); renderReferenceState(); toast('Referencia borrada'); };
+  $('btnMeasure').onclick = () => analyzeAndMaybeRecord(true);
+  $('btnAuto').onclick = toggleAuto;
+  $('btnExport').onclick = exportCSV;
+  $('btnReset').onclick = () => { log=[]; localStorage.removeItem(STORE_KEYS.log); renderLog(); toast('Conteo reiniciado'); };
+  $('btnConnectMonitor').onclick = connectMonitor;
+  $('btnReconnectMonitor').onclick = connectMonitor;
+  $('fileInput').onchange = handleFileInput;
+}
+
+function safeParse(txt, fallback){ try{return txt?JSON.parse(txt):fallback;}catch{return fallback;} }
+function toast(msg){ const el=$('toast'); el.textContent=msg; el.classList.add('show'); setTimeout(()=>el.classList.remove('show'),2400); }
+function setBadge(id, text, cls='idle'){ const el=$(id); el.textContent=text; el.className='badge '+cls; }
+function setStep(step){ ['stepCam','stepCal','stepRef','stepAudit'].forEach(id=>$(id).className='step'); $(step).className='step on'; }
 function clamp(v,min,max){ return Math.max(min, Math.min(max, v)); }
-function fmt(n,d=1){ return Number.isFinite(n) ? n.toFixed(d) : '--'; }
-function mmToCm(mm){ return mm/10; }
-function scoreFromError(err, maxErr){ if(!Number.isFinite(err) || maxErr<=0) return 0; return clamp(100 - (Math.abs(err)/maxErr)*100, 0, 100); }
-function nowStr(){ return new Date().toLocaleString(); }
 function cfg(){ return {
-  validateText:$('validateText').checked,
-  validateSize:$('validateSize').checked,
-  validateShape:$('validateShape').checked,
-  minScore:+$('minScore').value || 85,
+  lot: $('lotName').value.trim() || 'Sin lote',
+  minAlign:+$('minAlign').value || 85,
   maxErrX:+$('maxErrX').value || 3,
   maxErrY:+$('maxErrY').value || 3,
-  maxErrBase:+$('maxErrBase').value || 2.5,
   maxTextAngle:+$('maxTextAngle').value || 5,
-  sizeTolPct:+$('sizeTolPct').value || 5,
-  textZoneStart:+$('textZoneStart').value || 62,
-  textZoneEnd:+$('textZoneEnd').value || 96
+  textYStart:clamp((+$('textYStart').value || 45)/100,0,0.95),
+  textYEnd:clamp((+$('textYEnd').value || 92)/100,0.05,1),
+  chkText:$('chkText').checked,
+  chkSize:$('chkSize').checked,
+  chkArea:$('chkArea').checked
 };}
-function applyConfig(c){ if(!c) return; const map={validateText:'validateText',validateSize:'validateSize',validateShape:'validateShape',minScore:'minScore',maxErrX:'maxErrX',maxErrY:'maxErrY',maxErrBase:'maxErrBase',maxTextAngle:'maxTextAngle',sizeTolPct:'sizeTolPct',textZoneStart:'textZoneStart',textZoneEnd:'textZoneEnd'}; Object.entries(map).forEach(([k,id])=>{ if(c[k]!==undefined){ if($(id).type==='checkbox') $(id).checked=!!c[k]; else $(id).value=c[k]; }}); sendState(); }
-function sendPC(obj){ if(pcConn && pcConn.open){ try{ pcConn.send(obj); }catch(e){ console.warn('sendPC',e); } } }
-function sendState(){ sendPC({type:'state', version:APP_VERSION, camera:!!stream, calibration:!!calibration, reference:!!reference, autoMode, config:cfg(), counts:getCounts()}); }
 
-function resizeOverlay(){ const r=video.getBoundingClientRect(); overlay.width=Math.max(1, Math.round(r.width*devicePixelRatio)); overlay.height=Math.max(1, Math.round(r.height*devicePixelRatio)); octx.setTransform(devicePixelRatio,0,0,devicePixelRatio,0,0); }
-window.addEventListener('resize', resizeOverlay);
-
-async function listDevices(){
-  if(!navigator.mediaDevices?.enumerateDevices) return [];
-  const all = await navigator.mediaDevices.enumerateDevices();
-  devices = all.filter(d=>d.kind==='videoinput');
-  return devices;
+function exportConfig(){
+  return {
+    minAlign:+$('minAlign').value || 85,
+    maxErrX:+$('maxErrX').value || 3,
+    maxErrY:+$('maxErrY').value || 3,
+    maxTextAngle:+$('maxTextAngle').value || 5,
+    textYStart:+$('textYStart').value || 45,
+    textYEnd:+$('textYEnd').value || 92,
+    chkText:$('chkText').checked,
+    chkSize:$('chkSize').checked,
+    chkArea:$('chkArea').checked,
+    lot:$('lotName').value.trim() || 'Sin lote'
+  };
 }
+function applyRemoteConfig(c){
+  if(!c) return;
+  const map={minAlign:'minAlign',maxErrX:'maxErrX',maxErrY:'maxErrY',maxTextAngle:'maxTextAngle',textYStart:'textYStart',textYEnd:'textYEnd',lot:'lotName'};
+  Object.entries(map).forEach(([k,id])=>{ if(c[k]!==undefined) $(id).value=c[k]; });
+  ['chkText','chkSize','chkArea'].forEach(id=>{ if(c[id]!==undefined) $(id).checked=!!c[id]; });
+  sendMonitorState(); toast('Configuración actualizada desde PC');
+}
+function sendMonitorState(){
+  sendMonitor({type:'state', version:'11', camera:!!stream, calibration:!!calibration, reference:!!reference, autoMode, config:exportConfig(), counts:getCounts()});
+}
+function getCounts(){ const ok=log.filter(r=>r.result==='APROBADO').length, bad=log.filter(r=>r.result==='RECHAZADO').length; return {ok,bad,total:log.length}; }
+
+async function waitForOpenCV(){
+  const start = Date.now();
+  const timer = setInterval(()=>{
+    if(window.cv && typeof cv.Mat === 'function' && typeof cv.imread === 'function'){
+      clearInterval(timer); setBadge('cvStatus','OpenCV listo','ok'); toast('Motor de visión listo');
+    } else if(Date.now()-start>15000){
+      clearInterval(timer); setBadge('cvStatus','OpenCV no cargó','bad'); toast('OpenCV no cargó. Revisa internet o recarga.');
+    }
+  },250);
+}
+function cvReady(){ return window.cv && typeof cv.Mat === 'function' && typeof cv.imread === 'function'; }
+
 async function startCamera(deviceId=null){
-  if(!navigator.mediaDevices?.getUserMedia){ toast('Este navegador no permite cámara web. Usa Safari/Chrome en HTTPS.'); setBadge('Sin getUserMedia','bad'); return; }
-  stopCamera();
-  const attempts = [];
-  if(deviceId) attempts.push({video:{deviceId:{exact:deviceId}, width:{ideal:1280}, height:{ideal:720}}, audio:false});
-  attempts.push({video:{facingMode:{ideal:'environment'}, width:{ideal:1280}, height:{ideal:720}}, audio:false});
-  attempts.push({video:{facingMode:{ideal:'environment'}}, audio:false});
-  attempts.push({video:true, audio:false});
+  if(stream) stopStream();
+  usingPhoto = false;
+  const constraintsList = [];
+  if(deviceId) constraintsList.push({video:{deviceId:{exact:deviceId}, width:{ideal:1280}, height:{ideal:720}}, audio:false});
+  constraintsList.push(
+    {video:{facingMode:{ideal:'environment'}, width:{ideal:1280}, height:{ideal:720}}, audio:false},
+    {video:{facingMode:{ideal:'environment'}}, audio:false},
+    {video:{width:{ideal:1280}, height:{ideal:720}}, audio:false},
+    {video:true, audio:false}
+  );
   let lastErr=null;
-  for(const constraints of attempts){
+  for(const constraints of constraintsList){
     try{
       stream = await navigator.mediaDevices.getUserMedia(constraints);
       video.srcObject = stream;
       await video.play();
-      await listDevices();
-      setBadge('Cámara activa','live'); setStep('stepCamera','ok','Cámara activa');
-      resizeOverlay(); loop(); sendState(); toast('Cámara iniciada');
-      if(pcConn && pcConn.open){ try { peer.call(PEER_PREFIX + $('pairCode').value.trim().toLowerCase(), stream); } catch(e){} }
-      return;
-    }catch(err){ lastErr=err; console.warn('camera attempt failed', constraints, err); }
+      document.querySelector('.video-wrap').classList.add('video-live');
+      setBadge('cameraStatus','Cámara activa','ok');
+      $('guideTitle').textContent = 'Cámara activa';
+      $('guideSub').textContent = 'Coloca tarjeta o parche dentro del campo.';
+      await refreshDevices();
+      resizeOverlay();
+      loop();
+      if($('monitorId').value.trim()) connectMonitor();
+      return true;
+    }catch(e){ lastErr=e; }
   }
-  setBadge('Error cámara','bad'); setStep('stepCamera','bad','No abre cámara');
-  const msg = lastErr?.name || 'Error desconocido';
-  $('cameraHelp').textContent = `Error cámara: ${msg}. Revisa permisos, HTTPS, apps usando cámara y caché.`;
-  toast('No abre cámara: '+msg);
-  sendPC({type:'error', scope:'camera', message:msg});
+  setBadge('cameraStatus','Cámara bloqueada','bad');
+  document.querySelector('.video-wrap').classList.remove('video-live');
+  $('guideTitle').textContent = 'No abrió cámara';
+  $('guideSub').textContent = explainCameraError(lastErr);
+  toast(explainCameraError(lastErr));
+  console.error(lastErr);
+  return false;
 }
-function stopCamera(){ if(stream){ stream.getTracks().forEach(t=>t.stop()); stream=null; } }
+function explainCameraError(e){
+  if(!location.protocol.startsWith('https') && location.hostname !== 'localhost') return 'La cámara requiere HTTPS. Abre desde GitHub Pages, no desde archivo local.';
+  if(!navigator.mediaDevices?.getUserMedia) return 'Este navegador no permite cámara web aquí.';
+  if(!e) return 'No se pudo abrir cámara. Prueba Analizar foto.';
+  if(e.name==='NotAllowedError') return 'Permiso de cámara bloqueado. En Safari permite cámara para este sitio.';
+  if(e.name==='NotFoundError') return 'No se encontró cámara disponible.';
+  if(e.name==='NotReadableError') return 'La cámara está ocupada por otra app. Cierra Cámara/WhatsApp/Instagram.';
+  if(e.name==='OverconstrainedError') return 'El iPhone rechazó la configuración. Probando modo simple falló también.';
+  return `${e.name || 'Error'}: ${e.message || 'No se pudo abrir cámara'}`;
+}
+function stopStream(){
+  if(stream){ stream.getTracks().forEach(t=>t.stop()); stream=null; }
+}
+async function refreshDevices(){
+  try{
+    const all = await navigator.mediaDevices.enumerateDevices();
+    devices = all.filter(d=>d.kind==='videoinput');
+    const active = stream?.getVideoTracks?.()[0]?.getSettings?.().deviceId;
+    currentDeviceIndex = devices.findIndex(d=>d.deviceId===active);
+  }catch{ devices=[]; }
+}
 async function switchCamera(){
-  await listDevices();
-  if(!devices.length){ toast('No encuentro lista de cámaras. Intento genérico.'); return startCamera(); }
+  await refreshDevices();
+  if(!devices.length){ toast('No hay lista de cámaras. iOS a veces la oculta.'); return startCamera(); }
   currentDeviceIndex = (currentDeviceIndex + 1) % devices.length;
-  await startCamera(devices[currentDeviceIndex].deviceId);
+  return startCamera(devices[currentDeviceIndex].deviceId);
+}
+function resizeOverlay(){
+  const r = overlay.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  overlay.width = Math.max(1, Math.round(r.width*dpr)); overlay.height = Math.max(1, Math.round(r.height*dpr));
+  octx.setTransform(dpr,0,0,dpr,0,0);
+  drawOverlay(lastAnalysis);
 }
 function grabFrame(){
-  const vw = video.videoWidth, vh = video.videoHeight;
+  const vw = video.videoWidth || workCanvas.width;
+  const vh = video.videoHeight || workCanvas.height;
   if(!vw || !vh) return false;
-  capture.width=vw; capture.height=vh; capCtx.drawImage(video,0,0,vw,vh); return true;
+  capture.width = vw; capture.height = vh;
+  if(usingPhoto){ capCtx.drawImage(workCanvas,0,0,vw,vh); }
+  else capCtx.drawImage(video,0,0,vw,vh);
+  return true;
 }
-function loadPhoto(file){ return new Promise((resolve,reject)=>{ const img=new Image(); img.onload=()=>{ capture.width=img.naturalWidth; capture.height=img.naturalHeight; capCtx.drawImage(img,0,0); resolve(true); }; img.onerror=reject; img.src=URL.createObjectURL(file); }); }
-
-function requireCV(){ if(!window.cvReady || typeof cv==='undefined'){ toast('OpenCV aún está cargando. Espera unos segundos.'); return false; } return true; }
-function getMatFromCapture(){ return cv.imread(capture); }
-function orderPts(pts){
-  pts = pts.map(p=>({x:+p.x,y:+p.y}));
-  const sums=pts.map(p=>p.x+p.y), diffs=pts.map(p=>p.x-p.y);
-  const tl=pts[sums.indexOf(Math.min(...sums))];
-  const br=pts[sums.indexOf(Math.max(...sums))];
-  const tr=pts[diffs.indexOf(Math.max(...diffs))];
-  const bl=pts[diffs.indexOf(Math.min(...diffs))];
-  return [tl,tr,br,bl];
+function handleFileInput(ev){
+  const file = ev.target.files?.[0]; if(!file) return;
+  const img = new Image();
+  img.onload = () => {
+    usingPhoto = true;
+    stopStream();
+    video.srcObject = null;
+    workCanvas.width = img.naturalWidth; workCanvas.height = img.naturalHeight;
+    workCtx.drawImage(img,0,0);
+    capture.width = img.naturalWidth; capture.height = img.naturalHeight;
+    capCtx.drawImage(img,0,0);
+    document.querySelector('.video-wrap').classList.add('video-live');
+    setBadge('cameraStatus','Foto cargada','warn');
+    drawImageToOverlayPreview();
+    toast('Foto cargada. Ya puedes calibrar o medir.');
+  };
+  img.src = URL.createObjectURL(file);
 }
-function dist(a,b){ return Math.hypot(a.x-b.x,a.y-b.y); }
-function polygonArea(pts){ let s=0; for(let i=0;i<pts.length;i++){ const a=pts[i], b=pts[(i+1)%pts.length]; s += a.x*b.y-b.x*a.y; } return Math.abs(s/2); }
-function approxToPts(approx){ const data=approx.data32S; const pts=[]; for(let i=0;i<data.length;i+=2) pts.push({x:data[i],y:data[i+1]}); return pts; }
-function rectPoints(rect){ return cv.RotatedRect.points(rect).map(p=>({x:p.x,y:p.y})); }
-function makePerspective(srcPts, dstSize=WARP_SIZE){
-  const ordered=orderPts(srcPts);
-  const srcTri=cv.matFromArray(4,1,cv.CV_32FC2,[ordered[0].x,ordered[0].y,ordered[1].x,ordered[1].y,ordered[2].x,ordered[2].y,ordered[3].x,ordered[3].y]);
-  const dstTri=cv.matFromArray(4,1,cv.CV_32FC2,[0,0,dstSize,0,dstSize,dstSize,0,dstSize]);
-  const M=cv.getPerspectiveTransform(srcTri,dstTri);
-  srcTri.delete(); dstTri.delete();
-  return {M, ordered};
+function drawImageToOverlayPreview(){
+  octx.clearRect(0,0,overlay.clientWidth,overlay.clientHeight);
+  octx.drawImage(workCanvas,0,0,overlay.clientWidth,overlay.clientHeight);
 }
-function warpWithM(src, M, size=WARP_SIZE){ const dst=new cv.Mat(); cv.warpPerspective(src,dst,M,new cv.Size(size,size),cv.INTER_LINEAR,cv.BORDER_CONSTANT,new cv.Scalar(0,0,0,255)); return dst; }
-function drawDebugBackground(mat){
-  try{ cv.imshow(debugCanvas, mat); }catch(e){ dctx.fillStyle='#020915'; dctx.fillRect(0,0,700,700); }
-}
-function drawLine(ctx,a,b,color,w=3){ ctx.strokeStyle=color; ctx.lineWidth=w; ctx.beginPath(); ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y); ctx.stroke(); }
-function drawRect(ctx, r, color, w=3){ ctx.strokeStyle=color; ctx.lineWidth=w; ctx.strokeRect(r.x,r.y,r.w,r.h); }
-function drawPoly(ctx, pts, color, w=3){ if(!pts?.length) return; ctx.strokeStyle=color; ctx.lineWidth=w; ctx.beginPath(); pts.forEach((p,i)=>i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y)); ctx.closePath(); ctx.stroke(); }
-function drawText(ctx, txt, x, y, color='#fff'){ ctx.font='18px system-ui'; ctx.fillStyle='rgba(0,0,0,.65)'; ctx.fillRect(x-4,y-18,ctx.measureText(txt).width+8,24); ctx.fillStyle=color; ctx.fillText(txt,x,y); }
-function createWhiteMask(src){
-  const rgb=new cv.Mat(), hsv=new cv.Mat(), maskHSV=new cv.Mat(), gray=new cv.Mat(), maskGray=new cv.Mat(), mask=new cv.Mat();
-  cv.cvtColor(src,rgb,cv.COLOR_RGBA2RGB);
-  cv.cvtColor(rgb,hsv,cv.COLOR_RGB2HSV);
-  const low=new cv.Mat(hsv.rows,hsv.cols,hsv.type(),[0,0,135,0]);
-  const high=new cv.Mat(hsv.rows,hsv.cols,hsv.type(),[180,90,255,255]);
-  cv.inRange(hsv,low,high,maskHSV);
-  cv.cvtColor(src,gray,cv.COLOR_RGBA2GRAY);
-  cv.threshold(gray,maskGray,150,255,cv.THRESH_BINARY);
-  cv.bitwise_or(maskHSV,maskGray,mask);
-  const k1=cv.getStructuringElement(cv.MORPH_RECT,new cv.Size(7,7));
-  const k2=cv.getStructuringElement(cv.MORPH_RECT,new cv.Size(15,15));
-  cv.morphologyEx(mask,mask,cv.MORPH_CLOSE,k2);
-  cv.morphologyEx(mask,mask,cv.MORPH_OPEN,k1);
-  rgb.delete(); hsv.delete(); maskHSV.delete(); gray.delete(); maskGray.delete(); low.delete(); high.delete(); k1.delete(); k2.delete();
-  return mask;
-}
-function findBestQuadFromMask(mask){
-  const contours=new cv.MatVector(), hierarchy=new cv.Mat();
-  cv.findContours(mask,contours,hierarchy,cv.RETR_EXTERNAL,cv.CHAIN_APPROX_SIMPLE);
-  const imgArea=mask.rows*mask.cols;
-  let best=null;
-  for(let i=0;i<contours.size();i++){
-    const c=contours.get(i); const area=cv.contourArea(c); if(area<imgArea*0.015){ c.delete(); continue; }
-    let candidatePts=null, approx=new cv.Mat();
-    const peri=cv.arcLength(c,true);
-    for(const eps of [0.015,0.02,0.03,0.04,0.055,0.07]){
-      cv.approxPolyDP(c,approx,eps*peri,true);
-      if(approx.rows===4 && cv.isContourConvex(approx)){ candidatePts=approxToPts(approx); break; }
-    }
-    if(!candidatePts){
-      const rect=cv.minAreaRect(c); candidatePts=rectPoints(rect);
-    }
-    const pts=orderPts(candidatePts);
-    const wTop=dist(pts[0],pts[1]), wBot=dist(pts[3],pts[2]), hL=dist(pts[0],pts[3]), hR=dist(pts[1],pts[2]);
-    const w=(wTop+wBot)/2, h=(hL+hR)/2; const ratio=Math.max(w,h)/Math.max(1,Math.min(w,h));
-    const polyArea=polygonArea(pts);
-    const center={x:(pts[0].x+pts[1].x+pts[2].x+pts[3].x)/4,y:(pts[0].y+pts[1].y+pts[2].y+pts[3].y)/4};
-    const centerScore=1 - Math.min(1, Math.hypot(center.x-mask.cols/2, center.y-mask.rows/2)/(Math.hypot(mask.cols,mask.rows)/2));
-    const ratioScore=Math.max(0,1-(ratio-1)/0.55);
-    const areaScore=Math.min(1,polyArea/(imgArea*0.20));
-    const score=areaScore*45 + ratioScore*35 + centerScore*20;
-    if(!best || score>best.score) best={pts,score,area,ratio,center};
-    approx.delete(); c.delete();
-  }
-  hierarchy.delete(); contours.delete();
-  return best;
-}
-function validateWarpedCard(warped){
-  const gray=new cv.Mat(); cv.cvtColor(warped,gray,cv.COLOR_RGBA2GRAY);
-  const margin=100; // 10mm * 10px/mm
-  const innerRect=new cv.Rect(margin,margin,500,500);
-  const top=new cv.Rect(0,0,700,90), bottom=new cv.Rect(0,610,700,90), left=new cv.Rect(0,0,90,700), right=new cv.Rect(610,0,90,700);
-  const inner=gray.roi(innerRect); const rTop=gray.roi(top); const rBottom=gray.roi(bottom); const rLeft=gray.roi(left); const rRight=gray.roi(right);
-  const innerMean=cv.mean(inner)[0];
-  const borderMean=(cv.mean(rTop)[0]+cv.mean(rBottom)[0]+cv.mean(rLeft)[0]+cv.mean(rRight)[0])/4;
-  inner.delete(); rTop.delete(); rBottom.delete(); rLeft.delete(); rRight.delete(); gray.delete();
-  const contrast=borderMean-innerMean;
-  const blackOk=innerMean<115;
-  const whiteOk=borderMean>145;
-  const confidence=clamp((contrast/130)*70 + (blackOk?15:0) + (whiteOk?15:0),0,100);
-  return {innerMean,borderMean,contrast,confidence,blackOk,whiteOk};
-}
-function detectCard(useCurrentCapture=false){
-  if(!requireCV()) return null;
-  if(!useCurrentCapture && !grabFrame()) return null;
-  const src=getMatFromCapture();
-  let mask=null, warped=null, M=null;
-  try{
-    mask=createWhiteMask(src);
-    const best=findBestQuadFromMask(mask);
-    if(!best){ toast('No encontré tarjeta blanca. Acércala/centra y evita sombras.'); return null; }
-    const pers=makePerspective(best.pts,WARP_SIZE); M=pers.M;
-    warped=warpWithM(src,M,WARP_SIZE);
-    const val=validateWarpedCard(warped);
-    drawDebugBackground(warped);
-    dctx.strokeStyle='#1fd18a'; dctx.lineWidth=5; dctx.strokeRect(0,0,700,700);
-    dctx.strokeStyle='#ff4d5e'; dctx.lineWidth=4; dctx.strokeRect(100,100,500,500);
-    drawText(dctx,`Tarjeta confianza ${fmt(val.confidence,0)}%`,16,28,val.confidence>=80?'#1fd18a':'#ffd166');
-    drawText(dctx,`Exterior 7x7 cm / negro 5x5 cm`,16,54,'#eef6ff');
-    if(val.confidence<65){ toast('Tarjeta detectada, pero baja confianza. Mejora luz/contraste.'); }
-    calibration={
-      version:APP_VERSION,
-      ts:Date.now(),
-      M:Array.from(M.data64F || M.data32F),
-      confidence:val.confidence,
-      cardPts:best.pts,
-      width:src.cols,
-      height:src.rows,
-      pxPerMm:PX_PER_MM
-    };
-    localStorage.setItem('v10_calibration',JSON.stringify(calibration));
-    setStep('stepCard',val.confidence>=75?'ok':'bad',`Confianza ${fmt(val.confidence,0)}%`);
-    toast(`Calibración guardada: ${fmt(val.confidence,0)}% confianza`);
-    sendPC({type:'calibration', calibration, validation:val, debugImage:debugCanvas.toDataURL('image/jpeg',0.75)});
-    sendState();
-    return calibration;
-  }catch(e){ console.error(e); toast('Error detectando tarjeta'); sendPC({type:'error',scope:'card',message:String(e)}); return null; }
-  finally{ src.delete(); if(mask)mask.delete(); if(warped)warped.delete(); if(M)M.delete(); }
-}
-function matFromM(arr){ return cv.matFromArray(3,3,cv.CV_64FC1,arr); }
-function warpCurrentToPlane(src){ if(!calibration?.M) throw new Error('Sin calibración'); const M=matFromM(calibration.M); const warped=warpWithM(src,M,WARP_SIZE); M.delete(); return warped; }
-function createPatchMask(warped){
-  const gray=new cv.Mat(), mask=new cv.Mat();
-  cv.cvtColor(warped,gray,cv.COLOR_RGBA2GRAY);
-  cv.GaussianBlur(gray,gray,new cv.Size(5,5),0);
-  cv.threshold(gray,mask,92,255,cv.THRESH_BINARY);
-  const k1=cv.getStructuringElement(cv.MORPH_RECT,new cv.Size(9,9));
-  const k2=cv.getStructuringElement(cv.MORPH_RECT,new cv.Size(23,23));
-  cv.morphologyEx(mask,mask,cv.MORPH_CLOSE,k2);
-  cv.morphologyEx(mask,mask,cv.MORPH_OPEN,k1);
-  gray.delete(); k1.delete(); k2.delete(); return mask;
-}
-function findLargestContour(mask, minAreaPct=0.02){
-  const contours=new cv.MatVector(), hierarchy=new cv.Mat(); cv.findContours(mask,contours,hierarchy,cv.RETR_EXTERNAL,cv.CHAIN_APPROX_SIMPLE);
-  let best=null,bestArea=0,bestIndex=-1; const minArea=mask.rows*mask.cols*minAreaPct;
-  for(let i=0;i<contours.size();i++){ const c=contours.get(i); const a=cv.contourArea(c); if(a>bestArea && a>minArea){ if(best)best.delete(); best=c; bestArea=a; bestIndex=i; } else c.delete(); }
-  hierarchy.delete(); contours.delete(); return best?{contour:best,area:bestArea,index:bestIndex}:null;
-}
-function cropPatchNormalized(warped, contour){
-  const rect=cv.minAreaRect(contour);
-  let pts=orderPts(rectPoints(rect));
-  let w=Math.round(Math.max(dist(pts[0],pts[1]),dist(pts[3],pts[2])));
-  let h=Math.round(Math.max(dist(pts[0],pts[3]),dist(pts[1],pts[2])));
-  if(w<1||h<1) throw new Error('Patch rect inválido');
-  // Si quedó más alto que ancho y el texto está en la parte baja, lo dejamos como viene. No forzamos giro 90.
-  const srcTri=cv.matFromArray(4,1,cv.CV_32FC2,[pts[0].x,pts[0].y,pts[1].x,pts[1].y,pts[2].x,pts[2].y,pts[3].x,pts[3].y]);
-  const dstTri=cv.matFromArray(4,1,cv.CV_32FC2,[0,0,w,0,w,h,0,h]);
-  const M=cv.getPerspectiveTransform(srcTri,dstTri); const norm=new cv.Mat();
-  cv.warpPerspective(warped,norm,M,new cv.Size(w,h),cv.INTER_LINEAR,cv.BORDER_CONSTANT,new cv.Scalar(0,0,0,255));
-  srcTri.delete(); dstTri.delete(); M.delete();
-  let angle=rect.angle; if(rect.size.width<rect.size.height) angle += 90; if(angle>45) angle-=90; if(angle<-45) angle+=90;
-  return {norm, boxPts:pts, widthPx:w, heightPx:h, angle};
-}
-function detectTextAndGraphics(norm, config){
-  const w=norm.cols,h=norm.rows;
-  const y1=Math.round(h*clamp(config.textZoneStart,0,99)/100);
-  const y2=Math.round(h*clamp(config.textZoneEnd,1,100)/100);
-  const roiRect=new cv.Rect(0,y1,w,Math.max(1,y2-y1));
-  const roi=norm.roi(roiRect), gray=new cv.Mat(), textMask=new cv.Mat();
-  cv.cvtColor(roi,gray,cv.COLOR_RGBA2GRAY);
-  cv.GaussianBlur(gray,gray,new cv.Size(3,3),0);
-  cv.threshold(gray,textMask,115,255,cv.THRESH_BINARY_INV);
-  const kh=cv.getStructuringElement(cv.MORPH_RECT,new cv.Size(Math.max(9,Math.round(w*0.035)),3));
-  const kv=cv.getStructuringElement(cv.MORPH_RECT,new cv.Size(3,3));
-  cv.morphologyEx(textMask,textMask,cv.MORPH_CLOSE,kh);
-  cv.morphologyEx(textMask,textMask,cv.MORPH_OPEN,kv);
-  const contours=new cv.MatVector(), hierarchy=new cv.Mat(); cv.findContours(textMask,contours,hierarchy,cv.RETR_EXTERNAL,cv.CHAIN_APPROX_SIMPLE);
-  let union=null; let kept=0;
-  for(let i=0;i<contours.size();i++){
-    const c=contours.get(i); const r=cv.boundingRect(c); const area=cv.contourArea(c);
-    if(area>20 && r.width>w*0.03 && r.height>3){
-      const rr={x:r.x,y:r.y+y1,w:r.width,h:r.height};
-      if(!union) union={...rr}; else { const x0=Math.min(union.x,rr.x), y0=Math.min(union.y,rr.y), x1=Math.max(union.x+union.w,rr.x+rr.w), y1b=Math.max(union.y+union.h,rr.y+rr.h); union={x:x0,y:y0,w:x1-x0,h:y1b-y0}; }
-      kept++;
-    }
-    c.delete();
-  }
-  contours.delete(); hierarchy.delete(); kh.delete(); kv.delete(); roi.delete(); gray.delete(); textMask.delete();
-
-  let textAngle=0;
-  // Estimación de ángulo usando zona de texto completa, si hay caja.
-  if(union){
-    const safe=new cv.Rect(clamp(union.x,0,w-1),clamp(union.y,0,h-1),clamp(union.w,1,w-union.x),clamp(union.h,1,h-union.y));
-    const tRoi=norm.roi(safe), tg=new cv.Mat(), tm=new cv.Mat(); cv.cvtColor(tRoi,tg,cv.COLOR_RGBA2GRAY); cv.threshold(tg,tm,115,255,cv.THRESH_BINARY_INV);
-    const tv=new cv.MatVector(), th=new cv.Mat(); cv.findContours(tm,tv,th,cv.RETR_EXTERNAL,cv.CHAIN_APPROX_SIMPLE);
-    let allPts=[];
-    for(let i=0;i<tv.size();i++){ const c=tv.get(i); const r=cv.boundingRect(c); if(cv.contourArea(c)>8){ allPts.push({x:r.x+safe.x,y:r.y+safe.y}); allPts.push({x:r.x+r.width+safe.x,y:r.y+r.height+safe.y}); } c.delete(); }
-    if(allPts.length>=4){ const mat=cv.matFromArray(allPts.length,1,cv.CV_32SC2,allPts.flatMap(p=>[Math.round(p.x),Math.round(p.y)])); const rr=cv.minAreaRect(mat); textAngle=rr.angle; if(rr.size.width<rr.size.height) textAngle+=90; if(textAngle>45) textAngle-=90; if(textAngle<-45) textAngle+=90; mat.delete(); }
-    tRoi.delete(); tg.delete(); tm.delete(); tv.delete(); th.delete();
-  }
-
-  // Detectar bordado/gráfico arriba del texto: colores/saturación o zonas oscuras no blancas.
-  let graphicBox=null;
-  if(union){
-    const gy0=Math.round(h*0.12), gy1=Math.max(gy0+1, union.y-3);
-    if(gy1>gy0+10){
-      const groi=norm.roi(new cv.Rect(0,gy0,w,gy1-gy0));
-      const rgb=new cv.Mat(), hsv=new cv.Mat(), satMask=new cv.Mat(), darkMask=new cv.Mat(), gg=new cv.Mat(), gmask=new cv.Mat();
-      cv.cvtColor(groi,rgb,cv.COLOR_RGBA2RGB); cv.cvtColor(rgb,hsv,cv.COLOR_RGB2HSV);
-      const lowSat=new cv.Mat(hsv.rows,hsv.cols,hsv.type(),[0,45,40,0]);
-      const highSat=new cv.Mat(hsv.rows,hsv.cols,hsv.type(),[180,255,255,255]);
-      cv.inRange(hsv,lowSat,highSat,satMask);
-      cv.cvtColor(groi,gg,cv.COLOR_RGBA2GRAY); cv.threshold(gg,darkMask,135,255,cv.THRESH_BINARY_INV);
-      cv.bitwise_or(satMask,darkMask,gmask);
-      const kg=cv.getStructuringElement(cv.MORPH_RECT,new cv.Size(13,9)); cv.morphologyEx(gmask,gmask,cv.MORPH_CLOSE,kg); cv.morphologyEx(gmask,gmask,cv.MORPH_OPEN,cv.getStructuringElement(cv.MORPH_RECT,new cv.Size(5,5)));
-      const gv=new cv.MatVector(), gh=new cv.Mat(); cv.findContours(gmask,gv,gh,cv.RETR_EXTERNAL,cv.CHAIN_APPROX_SIMPLE);
-      let gu=null;
-      for(let i=0;i<gv.size();i++){ const c=gv.get(i); const r=cv.boundingRect(c); if(cv.contourArea(c)>80 && r.width>w*0.05){ const rr={x:r.x,y:r.y+gy0,w:r.width,h:r.height}; if(!gu)gu={...rr}; else{ const x0=Math.min(gu.x,rr.x), yy0=Math.min(gu.y,rr.y), x1=Math.max(gu.x+gu.w,rr.x+rr.w), yy1=Math.max(gu.y+gu.h,rr.y+rr.h); gu={x:x0,y:yy0,w:x1-x0,h:yy1-yy0}; } } c.delete(); }
-      graphicBox=gu;
-      groi.delete(); rgb.delete(); hsv.delete(); satMask.delete(); darkMask.delete(); gg.delete(); gmask.delete(); lowSat.delete(); highSat.delete(); kg.delete(); gv.delete(); gh.delete();
-    }
-  }
-  return {textBox:union, textAngle, graphicBox, textFound:!!union, components:kept, zone:{y1,y2}};
-}
-function analyzePatch(record=false, sourceAlreadyCaptured=false){
-  if(!requireCV()) return null;
-  if(!calibration){ toast('Primero calibra con tarjeta 7×7 / 5×5'); return null; }
-  if(!sourceAlreadyCaptured && !grabFrame()) return null;
-  const config=cfg();
-  const src=getMatFromCapture(); let warped=null, mask=null, patch=null, norm=null;
-  try{
-    warped=warpCurrentToPlane(src);
-    drawDebugBackground(warped);
-    mask=createPatchMask(warped);
-    patch=findLargestContour(mask,0.025);
-    if(!patch){ setDecision(null,'No detecté silueta del parche. Usa fondo azul/oscuro mate y parche completo.'); sendPC({type:'analysis', ok:false, reason:'No detecté silueta'}); return null; }
-    const patchContour=patch.contour;
-    const perimeterPx=cv.arcLength(patchContour,true);
-    const areaPx=cv.contourArea(patchContour);
-    const rect=cv.minAreaRect(patchContour);
-    const box=orderPts(rectPoints(rect));
-    const normPack=cropPatchNormalized(warped,patchContour); norm=normPack.norm;
-    const text=detectTextAndGraphics(norm,config);
-    const patchWmm=normPack.widthPx/PX_PER_MM, patchHmm=normPack.heightPx/PX_PER_MM;
-    const sizeCm=`${fmt(mmToCm(patchWmm),2)} × ${fmt(mmToCm(patchHmm),2)} cm`;
-    const perimCm=perimeterPx/PX_PER_MM/10;
-    const areaCm2=areaPx/(PX_PER_MM*PX_PER_MM)/100;
-    let baseToTextMm=null, offsetXmm=null, offsetYmm=null, alignScore=0, totalScore=0, pass=true, reasons=[];
-    if(text.textBox){
-      const tb=text.textBox;
-      const textCenterX=tb.x+tb.w/2, textCenterY=tb.y+tb.h/2;
-      offsetXmm=(textCenterX-norm.cols/2)/PX_PER_MM;
-      offsetYmm=(textCenterY-norm.rows/2)/PX_PER_MM;
-      if(text.graphicBox){ baseToTextMm=(tb.y - (text.graphicBox.y+text.graphicBox.h))/PX_PER_MM; }
-      if(reference?.features){
-        const ref=reference.features;
-        const refX=ref.textCenterXPct*norm.cols, refY=ref.textCenterYPct*norm.rows;
-        const errXmm=(textCenterX-refX)/PX_PER_MM;
-        const errYmm=(textCenterY-refY)/PX_PER_MM;
-        const errAngle=text.textAngle-ref.textAngleDeg;
-        const errBase=(baseToTextMm!==null && ref.baseToTextMm!==null) ? baseToTextMm-ref.baseToTextMm : 0;
-        const sX=scoreFromError(errXmm,config.maxErrX);
-        const sY=scoreFromError(errYmm,config.maxErrY);
-        const sA=scoreFromError(errAngle,config.maxTextAngle);
-        const sB=(baseToTextMm!==null && ref.baseToTextMm!==null) ? scoreFromError(errBase,config.maxErrBase) : 100;
-        alignScore=sX*.40+sY*.20+sA*.20+sB*.20;
-        reasons.push(`Texto ΔX ${fmt(errXmm,1)} mm, ΔY ${fmt(errYmm,1)} mm, ángulo Δ ${fmt(errAngle,1)}°, Base-Texto Δ ${fmt(errBase,1)} mm`);
-      }else{
-        const sX=scoreFromError(offsetXmm,config.maxErrX);
-        const sA=scoreFromError(text.textAngle,config.maxTextAngle);
-        alignScore=sX*.70+sA*.30;
-        reasons.push(`Sin referencia: centrado absoluto texto ${fmt(offsetXmm,1)} mm, ángulo ${fmt(text.textAngle,1)}°`);
-      }
-    }else{
-      alignScore=0; reasons.push('No detecté bloque de texto');
-    }
-    let sizeScore=100, shapeScore=100;
-    if(reference?.features){
-      const ref=reference.features;
-      sizeScore = Math.min(scoreFromError((patchWmm-ref.patchWmm)/ref.patchWmm*100, config.sizeTolPct), scoreFromError((patchHmm-ref.patchHmm)/ref.patchHmm*100, config.sizeTolPct));
-      shapeScore = Math.min(scoreFromError((areaCm2-ref.areaCm2)/ref.areaCm2*100, config.sizeTolPct*1.5), scoreFromError((perimCm-ref.perimCm)/ref.perimCm*100, config.sizeTolPct*1.5));
-    }
-    const activeWeights=[];
-    if(config.validateText) activeWeights.push(['text',alignScore,0.70]);
-    if(config.validateSize) activeWeights.push(['size',sizeScore,0.15]);
-    if(config.validateShape) activeWeights.push(['shape',shapeScore,0.15]);
-    if(activeWeights.length){ const sw=activeWeights.reduce((a,x)=>a+x[2],0); totalScore=activeWeights.reduce((a,x)=>a+x[1]*x[2],0)/sw; }
-    else totalScore=alignScore||100;
-    if(config.validateText && alignScore<config.minScore){ pass=false; reasons.push(`Alineación ${fmt(alignScore,0)}% menor al mínimo ${config.minScore}%`); }
-    if(config.validateSize && sizeScore<config.minScore){ pass=false; reasons.push(`Tamaño ${fmt(sizeScore,0)}% menor al mínimo`); }
-    if(config.validateShape && shapeScore<config.minScore){ pass=false; reasons.push(`Forma/área ${fmt(shapeScore,0)}% menor al mínimo`); }
-    const result={
-      ok:true, pass, time:nowStr(), score:totalScore, alignScore, sizeScore, shapeScore,
-      sizeCm, patchWmm, patchHmm, perimCm, areaCm2, patchAngle:normPack.angle,
-      baseToTextMm, offsetXmm, offsetYmm, textAngle:text.textAngle,
-      textFound:text.textFound, reason:reasons.join(' | '),
-      features:{
-        patchWmm, patchHmm, perimCm, areaCm2,
-        textCenterXPct:text.textBox?(text.textBox.x+text.textBox.w/2)/norm.cols:null,
-        textCenterYPct:text.textBox?(text.textBox.y+text.textBox.h/2)/norm.rows:null,
-        textAngleDeg:text.textAngle,
-        baseToTextMm,
-        textBoxPct:text.textBox?{x:text.textBox.x/norm.cols,y:text.textBox.y/norm.rows,w:text.textBox.w/norm.cols,h:text.textBox.h/norm.rows}:null,
-        graphicBoxPct:text.graphicBox?{x:text.graphicBox.x/norm.cols,y:text.graphicBox.y/norm.rows,w:text.graphicBox.w/norm.cols,h:text.graphicBox.h/norm.rows}:null
-      }
-    };
-    // Dibujar vista diagnóstico sobre parche normalizado, no solo raw. Es lo que realmente se analiza.
-    cv.imshow(debugCanvas,norm);
-    dctx.save();
-    drawRect(dctx,{x:0,y:0,w:norm.cols,h:norm.rows},'#ffd166',4);
-    drawLine(dctx,{x:norm.cols/2,y:0},{x:norm.cols/2,y:norm.rows},'#38d9ff',3);
-    drawLine(dctx,{x:0,y:norm.rows/2},{x:norm.cols,y:norm.rows/2},'rgba(56,217,255,.4)',2);
-    // zona texto
-    dctx.strokeStyle='rgba(255,255,255,.35)'; dctx.setLineDash([8,8]); dctx.strokeRect(0,text.zone.y1,norm.cols,text.zone.y2-text.zone.y1); dctx.setLineDash([]);
-    if(text.graphicBox){ drawRect(dctx,text.graphicBox,'#ff9f1c',3); drawLine(dctx,{x:0,y:text.graphicBox.y+text.graphicBox.h},{x:norm.cols,y:text.graphicBox.y+text.graphicBox.h},'#ff9f1c',2); }
-    if(text.textBox){
-      drawRect(dctx,text.textBox,'#ff4dff',4);
-      const tc={x:text.textBox.x+text.textBox.w/2,y:text.textBox.y+text.textBox.h/2};
-      drawLine(dctx,{x:tc.x,y:0},{x:tc.x,y:norm.rows},'#ff4d5e',3);
-      drawLine(dctx,{x:text.textBox.x,y:text.textBox.y+text.textBox.h/2},{x:0,y:text.textBox.y+text.textBox.h/2},'#fff',2);
-      drawLine(dctx,{x:text.textBox.x+text.textBox.w,y:text.textBox.y+text.textBox.h/2},{x:norm.cols,y:text.textBox.y+text.textBox.h/2},'#fff',2);
-    }
-    drawText(dctx,`${pass?'APROBADO':'RECHAZADO'}  Score ${fmt(totalScore,0)}%`,12,28,pass?'#1fd18a':'#ff4d5e');
-    drawText(dctx,`Tamaño ${sizeCm} | Perim ${fmt(perimCm,2)} cm | Área ${fmt(areaCm2,2)} cm²`,12,54,'#eef6ff');
-    if(baseToTextMm!==null) drawText(dctx,`Base a Texto ${fmt(baseToTextMm,1)} mm`,12,80,'#ffd166');
-    dctx.restore();
-    setDecision(result);
-    if(record) addLog(result);
-    const debugImage = (Date.now()-lastSendDebugTs>250) ? debugCanvas.toDataURL('image/jpeg',0.72) : null;
-    if(debugImage) lastSendDebugTs=Date.now();
-    sendPC({type:'analysis', result, debugImage});
-    setStep('stepAudit','ok','Medición activa');
-    patchContour.delete();
-    return result;
-  }catch(e){ console.error(e); toast('Error analizando parche'); sendPC({type:'error',scope:'analysis',message:String(e)}); return null; }
-  finally{ src.delete(); if(warped)warped.delete(); if(mask)mask.delete(); if(norm)norm.delete(); }
-}
-function takeReference(){
-  const res=analyzePatch(false,false);
-  if(!res?.ok || !res.textFound){ toast('No puedo guardar referencia: falta texto o parche'); return; }
-  reference={version:APP_VERSION, ts:Date.now(), features:res.features, preview:debugCanvas.toDataURL('image/jpeg',0.75)};
-  localStorage.setItem('v10_reference',JSON.stringify(reference));
-  setStep('stepRef','ok','Referencia 100% guardada'); toast('Referencia 100% guardada'); sendPC({type:'reference', reference}); sendState();
-}
-function setDecision(res,msg){
-  if(!res){ $('decision').textContent='ESPERANDO'; $('decision').className='decision neutral'; $('reason').textContent=msg||'Esperando.'; return; }
-  $('decision').textContent=res.pass?'APROBADO':'RECHAZADO'; $('decision').className='decision '+(res.pass?'ok':'bad');
-  $('mScore').textContent=fmt(res.score,0)+'%'; $('mAlign').textContent=fmt(res.alignScore,0)+'%'; $('mSize').textContent=res.sizeCm;
-  $('mPerim').textContent=fmt(res.perimCm,2)+' cm'; $('mArea').textContent=fmt(res.areaCm2,2)+' cm²';
-  $('mBaseText').textContent=res.baseToTextMm!==null?fmt(res.baseToTextMm,1)+' mm':'--';
-  $('mOffset').textContent=res.offsetXmm!==null?fmt(res.offsetXmm,1)+' mm':'--';
-  $('mTextAngle').textContent=fmt(res.textAngle,1)+'°'; $('reason').textContent=res.reason;
-}
-function getCounts(){ const ok=log.filter(x=>x.result==='APROBADO').length; return {ok,bad:log.length-ok,total:log.length}; }
-function renderLog(){
-  const c=getCounts(); $('okCount').textContent=c.ok; $('badCount').textContent=c.bad; $('totalCount').textContent=c.total;
-  $('logBody').innerHTML=log.slice(0,80).map(r=>`<tr><td>${r.time}</td><td>${r.result}</td><td>${r.score}</td><td>${r.baseText}</td><td>${r.reason}</td></tr>`).join('');
-  sendPC({type:'log', log:log.slice(0,80), counts:c});
-}
-function addLog(res){
-  const row={time:res.time,result:res.pass?'APROBADO':'RECHAZADO',score:fmt(res.score,0)+'%',baseText:res.baseToTextMm!==null?fmt(res.baseToTextMm,1)+' mm':'--',reason:res.reason};
-  log.unshift(row); log=log.slice(0,500); localStorage.setItem('v10_log',JSON.stringify(log)); renderLog();
-}
-function exportCSV(){
-  const head='Hora,Resultado,Score,BaseTexto,Motivo\n'; const body=log.map(r=>[r.time,r.result,r.score,r.baseText,`"${String(r.reason).replaceAll('"','""')}"`].join(',')).join('\n');
-  const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([head+body],{type:'text/csv'})); a.download='historial_inspector_v10.csv'; a.click();
-}
-function resetLog(){ log=[]; localStorage.setItem('v10_log','[]'); renderLog(); toast('Conteo reiniciado'); }
 
 function loop(){
-  if(stream){
-    if(autoMode && Date.now()-lastAutoTs>900){
-      const res=analyzePatch(false,false);
-      if(res?.ok){
-        const key = `${Math.round(res.patchWmm)}-${Math.round(res.patchHmm)}-${Math.round((res.offsetXmm||0)*10)}-${Math.round(res.score)}`;
-        if(!lockedUntilEmpty && key!==lastAnalysisKey){ addLog(res); lockedUntilEmpty=true; lastAnalysisKey=key; }
-        // Desbloqueo simple: si falla silueta en una lectura futura, se libera. No hacemos otra lectura extra aquí por rendimiento.
-        setTimeout(()=>{ lockedUntilEmpty=false; }, 1300);
-      }
-      lastAutoTs=Date.now();
-    }
-    requestAnimationFrame(loop);
+  if(!stream && !usingPhoto) return;
+  if(autoMode && Date.now()-lastAutoTs>900){
+    const res = analyzeAndMaybeRecord(false);
+    if(res){ lastAutoTs = Date.now(); }
   }
+  requestAnimationFrame(loop);
 }
-async function connectPc(){
-  const raw=$('pairCode').value.trim().toUpperCase().replace(/[^A-Z0-9]/g,'');
-  if(!/^[A-Z]{3}\d{4}$/.test(raw)){ toast('Código inválido. Debe ser ABC1234.'); return; }
-  $('pairCode').value=raw;
-  const targetId=PEER_PREFIX+raw.toLowerCase();
-  if(peer){ try{peer.destroy();}catch(e){} }
-  peer=new Peer(undefined,{debug:0});
-  peer.on('open',()=>{
-    pcConn=peer.connect(targetId,{reliable:true});
-    setupConn(pcConn);
-    pcConn.on('open',()=>{
-      $('pcStatus').textContent='PC conectado con código '+raw;
-      toast('PC conectado'); sendState(); renderLog();
-      if(stream){ try{ peer.call(targetId,stream); }catch(e){ console.warn(e); } }
+
+function calibrateFromCard(record=true){
+  if(!cvReady()){ toast('OpenCV aún no está listo'); return null; }
+  if(!grabFrame()){ toast('No hay imagen para analizar'); return null; }
+  let src = cv.imread(capture);
+  let result=null;
+  try{
+    result = detectCard(src);
+    if(!result || !result.ok){
+      setBadge('cvStatus','Tarjeta no confiable','warn');
+      toast(result?.message || 'No detecté tarjeta confiable. Acerca la tarjeta y evita brillos.');
+      drawOverlay({shapes: result?.shapes || [], stage:'card-fail'});
+      return null;
+    }
+    calibration = {
+      createdAt: new Date().toISOString(),
+      h: result.h,
+      quad: result.quad,
+      confidence: result.confidence,
+      pxPerMm: CARD.WARP_PX / CARD.OUTER_MM,
+      inner: result.inner,
+      imageSize:{w:capture.width,h:capture.height}
+    };
+    localStorage.setItem(STORE_KEYS.cal, JSON.stringify(calibration));
+    renderCalibrationState();
+    setStep('stepRef');
+    setBadge('cvStatus','Tarjeta calibrada','ok');
+    toast(`Tarjeta OK. Confianza ${result.confidence.toFixed(0)}%. Retira la tarjeta sin mover el celular.`);
+    drawOverlay({stage:'card-ok', shapes: result.shapes, card: result});
+    sendMonitor({type:'analysis', stage:'calibration', result:'CALIBRADO', shapes:result.shapes, imageSize:{w:capture.width,h:capture.height}, calibration});
+    return calibration;
+  }catch(e){ console.error(e); toast('Error calibrando tarjeta'); }
+  finally{ src.delete(); }
+  return null;
+}
+
+function detectCard(src){
+  const W = src.cols, H = src.rows;
+  let gray=new cv.Mat(), blur=new cv.Mat();
+  cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+  cv.GaussianBlur(gray, blur, new cv.Size(5,5), 0);
+  const thresholds = [145,160,175,190,205];
+  let best=null;
+  for(const t of thresholds){
+    let mask=new cv.Mat(), clean=new cv.Mat(), contours=new cv.MatVector(), hierarchy=new cv.Mat();
+    try{
+      cv.threshold(blur, mask, t, 255, cv.THRESH_BINARY);
+      const k1 = cv.Mat.ones(7,7,cv.CV_8U);
+      cv.morphologyEx(mask, clean, cv.MORPH_CLOSE, k1);
+      cv.morphologyEx(clean, clean, cv.MORPH_OPEN, k1);
+      k1.delete();
+      drawMatToCanvas(clean, 'debugWhite');
+      cv.findContours(clean, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+      for(let i=0;i<contours.size();i++){
+        const c = contours.get(i);
+        const cand = scoreCardCandidate(c, src, clean, t);
+        if(cand && (!best || cand.score > best.score)) best=cand;
+        c.delete();
+      }
+    } finally { mask.delete(); clean.delete(); contours.delete(); hierarchy.delete(); }
+  }
+  // adaptive threshold fallback
+  let adap=new cv.Mat(), contours=new cv.MatVector(), hierarchy=new cv.Mat();
+  try{
+    cv.adaptiveThreshold(blur, adap, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY, 51, -4);
+    const k = cv.Mat.ones(7,7,cv.CV_8U);
+    cv.morphologyEx(adap, adap, cv.MORPH_CLOSE, k); k.delete();
+    cv.findContours(adap, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+    for(let i=0;i<contours.size();i++){
+      const c=contours.get(i);
+      const cand=scoreCardCandidate(c, src, adap, 'adaptive');
+      if(cand && (!best || cand.score>best.score)) best=cand;
+      c.delete();
+    }
+  }finally{ adap.delete(); contours.delete(); hierarchy.delete(); gray.delete(); blur.delete(); }
+  if(!best) return {ok:false, message:'No encontré candidato de tarjeta blanca exterior.', shapes:[]};
+  const ok = best.confidence >= 72;
+  return {...best, ok, message: ok?'OK':'Candidato débil. Centra la tarjeta y aumenta contraste.'};
+}
+function scoreCardCandidate(contour, src, mask, thresholdName){
+  const imgArea = src.cols*src.rows;
+  const area = cv.contourArea(contour);
+  if(area < imgArea*0.015 || area > imgArea*0.85) return null;
+  const peri = cv.arcLength(contour, true);
+  if(peri <= 0) return null;
+  let approx=new cv.Mat();
+  cv.approxPolyDP(contour, approx, 0.025*peri, true);
+  let pts=null, method='approx4';
+  if(approx.rows === 4){ pts = matPoints(approx); }
+  else{
+    const rect=cv.minAreaRect(contour);
+    pts = cv.RotatedRect.points(rect).map(p=>({x:p.x,y:p.y}));
+    method='minAreaRectFallback';
+  }
+  approx.delete();
+  if(!pts || pts.length!==4) return null;
+  pts = orderQuad(pts);
+  if(!quadInBounds(pts, src.cols, src.rows)) return null;
+  const side = sideStats(pts);
+  if(side.min < 20) return null;
+  const aspectPenalty = Math.min(1, side.min/side.max);
+  const center = quadCenter(pts);
+  const centerDist = Math.hypot(center.x-src.cols/2, center.y-src.rows/2) / Math.hypot(src.cols/2, src.rows/2);
+
+  const warp = warpQuad(src, pts, CARD.WARP_PX, CARD.WARP_PX);
+  const inner = validateInnerBlack(warp);
+  drawMatToCanvas(warp, 'debugWarp');
+  warp.delete();
+
+  const areaScore = clamp(area/(imgArea*0.12),0,1)*18;
+  const aspectScore = aspectPenalty*18;
+  const centerScore = (1-clamp(centerDist,0,1))*10;
+  const innerScore = inner.score*45;
+  const methodScore = method==='approx4'?9:2;
+  const score = areaScore + aspectScore + centerScore + innerScore + methodScore;
+  const confidence = clamp(score,0,100);
+  const shapes = [
+    {type:'poly', pts, color:'#24d18f', label:`Tarjeta exterior ${Math.round(confidence)}%`},
+    {type:'point', x:center.x, y:center.y, color:'#5da9ff', label:'Centro tarjeta'}
+  ];
+  return {score, confidence, quad:pts, h:homographyArray(pts, [{x:0,y:0},{x:70,y:0},{x:70,y:70},{x:0,y:70}]), inner, thresholdName, shapes};
+}
+function validateInnerBlack(warp){
+  let gray=new cv.Mat(); cv.cvtColor(warp, gray, cv.COLOR_RGBA2GRAY);
+  const roiInner = gray.roi(new cv.Rect(CARD.INNER_START, CARD.INNER_START, CARD.INNER_END-CARD.INNER_START, CARD.INNER_END-CARD.INNER_START));
+  const top = gray.roi(new cv.Rect(40,40,620,55));
+  const bottom = gray.roi(new cv.Rect(40,605,620,55));
+  const left = gray.roi(new cv.Rect(40,40,55,620));
+  const right = gray.roi(new cv.Rect(605,40,55,620));
+  const innerMean = cv.mean(roiInner)[0];
+  const borderMean = (cv.mean(top)[0]+cv.mean(bottom)[0]+cv.mean(left)[0]+cv.mean(right)[0])/4;
+  let darkMask=new cv.Mat(); cv.threshold(roiInner, darkMask, Math.max(70, (innerMean+borderMean)/2), 255, cv.THRESH_BINARY_INV);
+  let contours=new cv.MatVector(), hierarchy=new cv.Mat();
+  cv.findContours(darkMask, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+  let bestRect=null, bestArea=0;
+  for(let i=0;i<contours.size();i++){
+    const c=contours.get(i), area=cv.contourArea(c);
+    if(area>bestArea){ bestArea=area; bestRect=cv.boundingRect(c); }
+    c.delete();
+  }
+  const contrast = borderMean - innerMean;
+  const expectedArea = 500*500;
+  const areaRatio = bestArea ? bestArea/expectedArea : 0;
+  const sizeW = bestRect ? bestRect.width : 0;
+  const sizeH = bestRect ? bestRect.height : 0;
+  const sizeScore = bestRect ? (1 - clamp((Math.abs(sizeW-500)+Math.abs(sizeH-500))/500,0,1)) : 0;
+  const contrastScore = clamp(contrast/120,0,1);
+  const areaScore = clamp(1-Math.abs(areaRatio-1),0,1);
+  const score = clamp((contrastScore*.45 + sizeScore*.35 + areaScore*.20),0,1);
+  const mmW = sizeW/10, mmH = sizeH/10;
+  roiInner.delete(); top.delete(); bottom.delete(); left.delete(); right.delete(); darkMask.delete(); contours.delete(); hierarchy.delete(); gray.delete();
+  return {score, contrast, innerMean, borderMean, widthMm:mmW, heightMm:mmH, areaRatio};
+}
+
+function saveReference(){
+  if(!calibration){ toast('Primero calibra tarjeta 7×7 / 5×5'); return; }
+  const res = analyzePatch(false);
+  if(!res || !res.patch){ toast('No detecté parche para referencia'); return; }
+  if(!res.text){ toast('No detecté bloque de texto. Ajusta zona de texto o luz.'); return; }
+  reference = {
+    createdAt:new Date().toISOString(),
+    patch:{ widthMm:res.patch.widthMm, heightMm:res.patch.heightMm, areaMm2:res.patch.areaMm2, perimeterMm:res.patch.perimeterMm },
+    text:{ centerXNorm:res.text.centerXNorm, centerYNorm:res.text.centerYNorm, angleDeg:res.text.angleDeg, widthNorm:res.text.widthNorm, heightNorm:res.text.heightNorm, marginLeftNorm:res.text.marginLeftNorm, marginRightNorm:res.text.marginRightNorm, baseToTextMm:res.text.baseToTextMm, baseYNorm:res.text.baseYNorm }
+  };
+  localStorage.setItem(STORE_KEYS.ref, JSON.stringify(reference));
+  renderReferenceState();
+  setStep('stepAudit');
+  toast('Referencia aprobada guardada');
+}
+
+function analyzeAndMaybeRecord(record){
+  if(!calibration){ toast('Primero calibra con la tarjeta 7×7 / 5×5'); return null; }
+  const res = analyzePatch(true);
+  if(!res) return null;
+  lastAnalysis = res;
+  drawOverlay(res);
+  renderResult(res);
+  sendMonitorPayload(res);
+  if(record) addLog(res);
+  else if(autoMode && res.patch){
+    const sig = `${Math.round(res.patch.center.x/8)}-${Math.round(res.patch.center.y/8)}-${res.result}`;
+    if(sig !== lastLoggedSignature){ addLog(res); lastLoggedSignature=sig; }
+  }
+  return res;
+}
+function analyzePatch(updateDebug=true){
+  if(!cvReady()){ toast('OpenCV aún no está listo'); return null; }
+  if(!grabFrame()){ toast('No hay imagen'); return null; }
+  let src=cv.imread(capture);
+  let result=null;
+  try{
+    const patch = detectPatch(src);
+    if(!patch){
+      result = {stage:'audit', result:'ESPERANDO', pass:false, reason:'No detecté silueta del parche.', imageSize:{w:capture.width,h:capture.height}, shapes:[]};
+      return result;
+    }
+    const text = detectTextInPatch(patch.patchWarp, patch.widthMm, patch.heightMm, patch.box);
+    const evalRes = evaluatePatchAndText(patch, text);
+    result = {stage:'audit', result:evalRes.pass?'APROBADO':'RECHAZADO', pass:evalRes.pass, reason:evalRes.reason, imageSize:{w:capture.width,h:capture.height}, patch, text, shapes:[...patch.shapes, ...(text?.shapesOriginal || [])], score:evalRes.score};
+    if(updateDebug){ drawMatToCanvas(patch.patchWarp, 'debugPatch'); if(text?.mask) drawMatToCanvas(text.mask, 'debugText'); }
+    if(text?.mask) text.mask.delete?.();
+    patch.patchWarp.delete?.();
+  }catch(e){ console.error(e); toast('Error analizando parche'); }
+  finally{ src.delete(); }
+  return result;
+}
+
+function detectPatch(src){
+  const roiRect = calibrationROI(src.cols, src.rows);
+  let roi = src.roi(roiRect);
+  let gray=new cv.Mat(), blur=new cv.Mat(), edges=new cv.Mat(), closed=new cv.Mat(), contours=new cv.MatVector(), hierarchy=new cv.Mat();
+  try{
+    cv.cvtColor(roi, gray, cv.COLOR_RGBA2GRAY);
+    cv.GaussianBlur(gray, blur, new cv.Size(5,5), 0);
+    cv.Canny(blur, edges, 35, 120);
+    const k=cv.Mat.ones(5,5,cv.CV_8U);
+    cv.morphologyEx(edges, closed, cv.MORPH_CLOSE, k);
+    k.delete();
+    cv.findContours(closed, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+    let best=null, bestScore=0;
+    for(let i=0;i<contours.size();i++){
+      const c=contours.get(i);
+      const area=cv.contourArea(c);
+      if(area < roiRect.width*roiRect.height*0.015 || area > roiRect.width*roiRect.height*0.82){ c.delete(); continue; }
+      const rect=cv.minAreaRect(c);
+      const pts = cv.RotatedRect.points(rect).map(p=>({x:p.x+roiRect.x,y:p.y+roiRect.y}));
+      const bbox=cv.boundingRect(c);
+      const center={x:roiRect.x + bbox.x + bbox.width/2, y:roiRect.y + bbox.y + bbox.height/2};
+      const rectArea = Math.max(1, rect.size.width*rect.size.height);
+      const fill = area/rectArea;
+      const centerScore = 1 - clamp(Math.hypot(center.x-src.cols/2, center.y-src.rows/2)/Math.hypot(src.cols/2,src.rows/2),0,1);
+      const score = area * (0.35+fill) * (0.6+centerScore);
+      if(score>bestScore){ bestScore=score; best={contour:c, rect, pts, center, areaPx:area}; }
+      else c.delete();
+    }
+    if(!best) return null;
+    const boxOrdered = orderQuad(best.pts);
+    const metricPts = boxOrdered.map(p=>transformPoint(calibration.h,p.x,p.y));
+    const w1=dist(metricPts[0],metricPts[1]), w2=dist(metricPts[3],metricPts[2]), h1=dist(metricPts[0],metricPts[3]), h2=dist(metricPts[1],metricPts[2]);
+    const widthMm=(w1+w2)/2, heightMm=(h1+h2)/2;
+    const contourPts = contourToPoints(best.contour, roiRect.x, roiRect.y).map(p=>transformPoint(calibration.h,p.x,p.y));
+    const perimeterMm = polygonPerimeter(contourPts);
+    const areaMm2 = Math.abs(polygonArea(contourPts));
+    const angleDeg = normalizeRectAngle(best.rect.angle, best.rect.size.width, best.rect.size.height);
+    const patchWarp = warpQuad(src, boxOrdered, Math.max(120, Math.round(widthMm*10)), Math.max(120, Math.round(heightMm*10)));
+    const shapes=[
+      {type:'poly', pts:contourToPoints(best.contour, roiRect.x, roiRect.y, 3), color:'#24d18f', label:'Silueta parche'},
+      {type:'poly', pts:boxOrdered, color:'#ffd166', label:'Caja parche'},
+      {type:'cross', x:best.center.x, y:best.center.y, color:'#5da9ff', label:'Centro parche'}
+    ];
+    best.contour.delete();
+    return {widthMm,heightMm,perimeterMm,areaMm2,angleDeg,box:boxOrdered,center:best.center,patchWarp,shapes};
+  } finally { roi.delete(); gray.delete(); blur.delete(); edges.delete(); closed.delete(); contours.delete(); hierarchy.delete(); }
+}
+function calibrationROI(w,h){
+  if(!calibration?.quad) return new cv.Rect(0,0,w,h);
+  const xs=calibration.quad.map(p=>p.x), ys=calibration.quad.map(p=>p.y);
+  const minX=Math.max(0, Math.min(...xs)), maxX=Math.min(w, Math.max(...xs));
+  const minY=Math.max(0, Math.min(...ys)), maxY=Math.min(h, Math.max(...ys));
+  const bw=maxX-minX, bh=maxY-minY;
+  const pad=Math.max(bw,bh)*0.45;
+  const x=Math.max(0, Math.floor(minX-pad)), y=Math.max(0, Math.floor(minY-pad));
+  const x2=Math.min(w, Math.ceil(maxX+pad)), y2=Math.min(h, Math.ceil(maxY+pad));
+  return new cv.Rect(x,y,Math.max(1,x2-x),Math.max(1,y2-y));
+}
+
+function detectTextInPatch(patchWarp, patchWmm, patchHmm, patchBoxOriginal){
+  const c = cfg();
+  const W=patchWarp.cols, H=patchWarp.rows;
+  const y0=Math.floor(H*Math.min(c.textYStart,c.textYEnd-0.02));
+  const y1=Math.floor(H*Math.max(c.textYEnd,c.textYStart+0.02));
+  const roiRect=new cv.Rect(0, y0, W, Math.max(1,y1-y0));
+  let roi=patchWarp.roi(roiRect), gray=new cv.Mat(), eq=new cv.Mat();
+  cv.cvtColor(roi, gray, cv.COLOR_RGBA2GRAY);
+  cv.equalizeHist(gray, eq);
+  const candidates=[];
+  const modes=[cv.THRESH_BINARY_INV, cv.THRESH_BINARY];
+  for(const mode of modes){
+    let mask=new cv.Mat(), close=new cv.Mat(), contours=new cv.MatVector(), hierarchy=new cv.Mat();
+    try{
+      cv.adaptiveThreshold(eq, mask, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, mode, 31, 5);
+      const kH=cv.Mat.ones(5,17,cv.CV_8U);
+      const kO=cv.Mat.ones(2,2,cv.CV_8U);
+      cv.morphologyEx(mask, close, cv.MORPH_CLOSE, kH);
+      cv.morphologyEx(close, close, cv.MORPH_OPEN, kO);
+      kH.delete(); kO.delete();
+      cv.findContours(close, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+      const boxes=[];
+      for(let i=0;i<contours.size();i++){
+        const cnt=contours.get(i); const area=cv.contourArea(cnt); const r=cv.boundingRect(cnt);
+        cnt.delete();
+        if(area < W*H*0.00012) continue;
+        if(r.width < W*0.03 || r.height < H*0.006) continue;
+        if(r.width/r.height < 1.2) continue;
+        boxes.push({x:r.x,y:r.y+y0,w:r.width,h:r.height,area});
+      }
+      const union = unionBoxes(boxes);
+      if(union){
+        const areaRatio=(union.w*union.h)/(W*H);
+        const shapeScore = clamp((union.w/Math.max(1,union.h))/8,0,1);
+        const sizeScore = areaRatio>0.001 && areaRatio<0.38 ? 1 : 0.2;
+        candidates.push({mode, union, score:shapeScore*45+sizeScore*35+boxes.length*2, mask:close.clone()});
+      }
+    } finally { mask.delete(); close.delete(); contours.delete(); hierarchy.delete(); }
+  }
+  roi.delete(); gray.delete(); eq.delete();
+  if(!candidates.length) return null;
+  candidates.sort((a,b)=>b.score-a.score);
+  const best=candidates[0]; candidates.slice(1).forEach(x=>x.mask.delete());
+  const b=best.union;
+  const centerX=b.x+b.w/2, centerY=b.y+b.h/2;
+  // Angle: approximate via minAreaRect on selected ROI mask translated into patch coords
+  let angleDeg=0;
+  try{
+    let contours=new cv.MatVector(), hierarchy=new cv.Mat();
+    cv.findContours(best.mask, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+    let pts=[];
+    for(let i=0;i<contours.size();i++){
+      const cnt=contours.get(i); const r=cv.boundingRect(cnt);
+      if(r.width>W*0.03 && r.height>2) pts.push({x:r.x+r.width/2, y:r.y+y0+r.height/2});
+      cnt.delete();
+    }
+    if(pts.length>=2){
+      const lr = linearRegressionAngle(pts);
+      angleDeg = lr;
+    }
+    contours.delete(); hierarchy.delete();
+  }catch{}
+  const patchWpx=W, patchHpx=H;
+  const mmPerPxX = patchWmm / patchWpx;
+  const mmPerPxY = patchHmm / patchHpx;
+  const marginLeftMm = b.x * mmPerPxX;
+  const marginRightMm = (W - (b.x+b.w)) * mmPerPxX;
+  const marginTopMm = b.y * mmPerPxY;
+  const marginBottomMm = (H - (b.y+b.h)) * mmPerPxY;
+  const offsetXmm = (centerX - W/2) * mmPerPxX;
+  const offsetYmm = (centerY - H/2) * mmPerPxY;
+  const base = detectBaseAboveText(patchWarp, b);
+  const baseToTextMm = base ? Math.max(0,(b.y - base.yBottom) * mmPerPxY) : null;
+  const shapesOriginal = projectTextBoxToOriginal(b, patchBoxOriginal, W, H, base);
+  return {
+    x:b.x,y:b.y,w:b.w,h:b.h, centerX, centerY,
+    centerXNorm:centerX/W, centerYNorm:centerY/H, widthNorm:b.w/W, heightNorm:b.h/H,
+    marginLeftNorm:b.x/W, marginRightNorm:(W-b.x-b.w)/W,
+    marginLeftMm, marginRightMm, marginTopMm, marginBottomMm, offsetXmm, offsetYmm, angleDeg, baseToTextMm, baseYNorm:base?base.yBottom/H:null,
+    widthMm:b.w*mmPerPxX, heightMm:b.h*mmPerPxY,
+    mask:best.mask, shapesOriginal
+  };
+}
+function detectBaseAboveText(patchWarp, textBox){
+  // Busca el borde inferior del bordado/escudo como el último contenido visual fuerte arriba del texto.
+  const W=patchWarp.cols, H=patchWarp.rows;
+  const yEnd=Math.max(5, Math.min(H-1, textBox.y-2));
+  if(yEnd < H*0.12) return null;
+  const roiRect=new cv.Rect(0,0,W,yEnd);
+  let roi=patchWarp.roi(roiRect), hsv=new cv.Mat(), channels=new cv.MatVector(), sat=new cv.Mat(), gray=new cv.Mat(), dark=new cv.Mat(), color=new cv.Mat(), mask=new cv.Mat(), close=new cv.Mat(), contours=new cv.MatVector(), hierarchy=new cv.Mat();
+  try{
+    cv.cvtColor(roi,hsv,cv.COLOR_RGBA2RGB); cv.cvtColor(hsv,hsv,cv.COLOR_RGB2HSV);
+    cv.split(hsv,channels); sat=channels.get(1);
+    cv.cvtColor(roi,gray,cv.COLOR_RGBA2GRAY);
+    cv.threshold(sat,color,45,255,cv.THRESH_BINARY);
+    cv.threshold(gray,dark,170,255,cv.THRESH_BINARY_INV);
+    cv.bitwise_or(color,dark,mask);
+    const k=cv.Mat.ones(5,9,cv.CV_8U); cv.morphologyEx(mask,close,cv.MORPH_CLOSE,k); cv.morphologyEx(close,close,cv.MORPH_OPEN,cv.Mat.ones(2,2,cv.CV_8U)); k.delete();
+    cv.findContours(close,contours,hierarchy,cv.RETR_EXTERNAL,cv.CHAIN_APPROX_SIMPLE);
+    let yBottom=-1, bestArea=0, bestRect=null;
+    for(let i=0;i<contours.size();i++){
+      const cnt=contours.get(i), area=cv.contourArea(cnt), r=cv.boundingRect(cnt); cnt.delete();
+      if(area < W*H*0.0008) continue;
+      // Ignora ruido y líneas demasiado pequeñas; nos interesa el bloque del escudo/bordado.
+      if(r.width < W*0.08 || r.height < H*0.025) continue;
+      const bottom=r.y+r.height;
+      if(bottom>yBottom || area>bestArea){ yBottom=bottom; bestArea=area; bestRect=r; }
+    }
+    return yBottom>0 ? {yBottom, rect:bestRect} : null;
+  }catch(e){ console.warn('base detection fail',e); return null; }
+  finally{ roi.delete(); hsv.delete(); channels.delete(); try{sat.delete();}catch{} gray.delete(); dark.delete(); color.delete(); mask.delete(); close.delete(); contours.delete(); hierarchy.delete(); }
+}
+
+function projectTextBoxToOriginal(b, patchBoxOriginal, W, H, base=null){
+  if(!patchBoxOriginal) return [];
+  const Hback = homographyArray([{x:0,y:0},{x:W,y:0},{x:W,y:H},{x:0,y:H}], patchBoxOriginal);
+  const box = [
+    transformPoint(Hback,b.x,b.y),
+    transformPoint(Hback,b.x+b.w,b.y),
+    transformPoint(Hback,b.x+b.w,b.y+b.h),
+    transformPoint(Hback,b.x,b.y+b.h)
+  ];
+  const patchCenterTop = transformPoint(Hback,W/2,0);
+  const patchCenterBottom = transformPoint(Hback,W/2,H);
+  const textCenterTop = transformPoint(Hback,b.x+b.w/2,b.y);
+  const textCenterBottom = transformPoint(Hback,b.x+b.w/2,b.y+b.h);
+  const textLeftTop = transformPoint(Hback,b.x,b.y);
+  const textLeftBottom = transformPoint(Hback,b.x,b.y+b.h);
+  const textRightTop = transformPoint(Hback,b.x+b.w,b.y);
+  const textRightBottom = transformPoint(Hback,b.x+b.w,b.y+b.h);
+  const shapes = [
+    {type:'poly', pts:box, color:'#ffd166', label:'Bloque texto'},
+    {type:'line', x1:patchCenterTop.x, y1:patchCenterTop.y, x2:patchCenterBottom.x, y2:patchCenterBottom.y, color:'#5da9ff', label:'Centro parche'},
+    {type:'line', x1:textCenterTop.x, y1:textCenterTop.y, x2:textCenterBottom.x, y2:textCenterBottom.y, color:'#ff5265', label:'Centro texto'},
+    {type:'line', x1:textLeftTop.x, y1:textLeftTop.y, x2:textLeftBottom.x, y2:textLeftBottom.y, color:'#ffffff', label:'Margen izq'},
+    {type:'line', x1:textRightTop.x, y1:textRightTop.y, x2:textRightBottom.x, y2:textRightBottom.y, color:'#ffffff', label:'Margen der'}
+  ];
+  if(base?.yBottom!=null){
+    const b1=transformPoint(Hback,0,base.yBottom), b2=transformPoint(Hback,W,base.yBottom);
+    const t1=transformPoint(Hback,0,b.y), t2=transformPoint(Hback,W,b.y);
+    shapes.push({type:'line', x1:b1.x,y1:b1.y,x2:b2.x,y2:b2.y,color:'#ff9f1c',label:'Base bordado'});
+    shapes.push({type:'line', x1:t1.x,y1:t1.y,x2:t2.x,y2:t2.y,color:'#b392ff',label:'Inicio texto'});
+  }
+  return shapes;
+}
+function unionBoxes(boxes){
+  if(!boxes.length) return null;
+  const x1=Math.min(...boxes.map(b=>b.x)); const y1=Math.min(...boxes.map(b=>b.y));
+  const x2=Math.max(...boxes.map(b=>b.x+b.w)); const y2=Math.max(...boxes.map(b=>b.y+b.h));
+  return {x:x1,y:y1,w:x2-x1,h:y2-y1};
+}
+function linearRegressionAngle(points){
+  const n=points.length; let sx=0,sy=0,sxx=0,sxy=0;
+  points.forEach(p=>{sx+=p.x;sy+=p.y;sxx+=p.x*p.x;sxy+=p.x*p.y;});
+  const den=n*sxx-sx*sx; if(Math.abs(den)<1e-6) return 0;
+  const m=(n*sxy-sx*sy)/den;
+  return Math.atan(m)*180/Math.PI;
+}
+
+function evaluatePatchAndText(patch, text){
+  const c=cfg(); let reasons=[], pass=true, score=0;
+  if(!text){
+    if(c.chkText){ pass=false; reasons.push('No detecté bloque de texto'); }
+    return {pass, reason:reasons.join('; ')||'Sin texto detectado', score:0};
+  }
+  let targetX=0.5, targetY=0.5, targetAngle=0;
+  if(reference?.text){ targetX=reference.text.centerXNorm; targetY=reference.text.centerYNorm; targetAngle=reference.text.angleDeg || 0; }
+  const errXmm = (text.centerXNorm-targetX)*patch.widthMm;
+  const errYmm = (text.centerYNorm-targetY)*patch.heightMm;
+  const errAng = Math.abs(normalizeAngleDelta(text.angleDeg-targetAngle));
+  const errBase = (reference?.text?.baseToTextMm!=null && text.baseToTextMm!=null) ? (text.baseToTextMm - reference.text.baseToTextMm) : 0;
+  const scoreX = 100*(1-clamp(Math.abs(errXmm)/c.maxErrX,0,1));
+  const scoreY = 100*(1-clamp(Math.abs(errYmm)/c.maxErrY,0,1));
+  const scoreA = 100*(1-clamp(errAng/c.maxTextAngle,0,1));
+  const maxBaseErr = Math.max(1.5, c.maxErrY);
+  const scoreB = reference?.text?.baseToTextMm!=null && text.baseToTextMm!=null ? 100*(1-clamp(Math.abs(errBase)/maxBaseErr,0,1)) : 100;
+  score = Math.round(scoreX*0.42 + scoreY*0.20 + scoreA*0.18 + scoreB*0.20);
+  text.alignmentScore=score; text.errXmm=errXmm; text.errYmm=errYmm; text.errAngleDeg=errAng; text.errBaseToTextMm=errBase;
+  if(c.chkText && score < c.minAlign){ pass=false; reasons.push(`Texto alineado ${score}%, mínimo ${c.minAlign}%`); }
+  if(c.chkText && Math.abs(errXmm)>c.maxErrX){ reasons.push(`Texto corrido ${errXmm>0?'derecha':'izquierda'} ${Math.abs(errXmm).toFixed(1)} mm`); }
+  if(c.chkText && errAng>c.maxTextAngle){ reasons.push(`Texto inclinado ${errAng.toFixed(1)}°`); }
+  if(c.chkText && reference?.text?.baseToTextMm!=null && text.baseToTextMm!=null && Math.abs(errBase)>Math.max(1.5,c.maxErrY)){ reasons.push(`Base a Texto cambió ${errBase>0?'+':''}${errBase.toFixed(1)} mm`); }
+  if(c.chkSize && reference?.patch){
+    const dw = Math.abs(patch.widthMm-reference.patch.widthMm)/reference.patch.widthMm;
+    const dh = Math.abs(patch.heightMm-reference.patch.heightMm)/reference.patch.heightMm;
+    if(dw>0.035 || dh>0.035){ pass=false; reasons.push('Tamaño fuera de referencia ±3.5%'); }
+  }
+  if(c.chkArea && reference?.patch){
+    const da = Math.abs(patch.areaMm2-reference.patch.areaMm2)/reference.patch.areaMm2;
+    const dp = Math.abs(patch.perimeterMm-reference.patch.perimeterMm)/reference.patch.perimeterMm;
+    if(da>0.06 || dp>0.04){ pass=false; reasons.push('Área/perímetro fuera de referencia'); }
+  }
+  return {pass, reason:reasons.join('; ') || `Texto alineado ${score}%`, score};
+}
+
+function renderResult(res){
+  if(!res || !res.patch){
+    $('decision').textContent='ESPERANDO'; $('decision').className='decision neutral'; $('reason').textContent=res?.reason || 'Esperando parche.'; return;
+  }
+  $('decision').textContent=res.pass?'APROBADO':'RECHAZADO'; $('decision').className='decision '+(res.pass?'ok':'bad');
+  $('reason').textContent=res.reason;
+  $('mAlign').textContent=res.text?.alignmentScore!=null ? `${res.text.alignmentScore}%` : '--';
+  $('mSize').textContent=`${(res.patch.widthMm/10).toFixed(2)} × ${(res.patch.heightMm/10).toFixed(2)} cm`;
+  $('mPerimeter').textContent=`${(res.patch.perimeterMm/10).toFixed(2)} cm`;
+  $('mArea').textContent=`${(res.patch.areaMm2/100).toFixed(2)} cm²`;
+  $('mTextOffset').textContent=res.text ? `${res.text.errXmm?.toFixed(1) ?? res.text.offsetXmm.toFixed(1)} mm` : '--';
+  $('mTextAngle').textContent=res.text ? `${(res.text.errAngleDeg ?? Math.abs(res.text.angleDeg)).toFixed(1)}°` : '--';
+  if($('mBaseText')) $('mBaseText').textContent=res.text?.baseToTextMm!=null ? `${res.text.baseToTextMm.toFixed(1)} mm` : '--';
+}
+function renderCalibrationState(){
+  if(!calibration){
+    $('calState').textContent='Sin calibrar'; $('calConfidence').textContent='--'; $('calScale').textContent='--'; $('innerSize').textContent='--';
+    setStep('stepCal');
+    return;
+  }
+  $('calState').textContent='Calibrada';
+  $('calConfidence').textContent=`${Math.round(calibration.confidence)}%`;
+  $('calScale').textContent=`${calibration.pxPerMm.toFixed(2)} px/mm`;
+  $('innerSize').textContent=`${calibration.inner.widthMm.toFixed(1)} × ${calibration.inner.heightMm.toFixed(1)} mm`;
+  sendMonitorState();
+}
+function renderReferenceState(){
+  sendMonitorState();
+  $('refState').textContent = reference ? `Referencia guardada: ${(reference.patch.widthMm/10).toFixed(2)}×${(reference.patch.heightMm/10).toFixed(2)} cm, texto ideal X ${(reference.text.centerXNorm*100).toFixed(1)}%, Base-Texto ${reference.text.baseToTextMm!=null?reference.text.baseToTextMm.toFixed(1)+' mm':'--'}.` : 'Referencia: no guardada.';
+}
+function addLog(res){
+  if(!res?.patch) return;
+  const row={
+    time:new Date().toLocaleString(), lot:cfg().lot, result:res.result,
+    align:res.text?.alignmentScore ?? '', size:`${(res.patch.widthMm/10).toFixed(2)}x${(res.patch.heightMm/10).toFixed(2)}`,
+    perimeter:(res.patch.perimeterMm/10).toFixed(2), area:(res.patch.areaMm2/100).toFixed(2), reason:res.reason
+  };
+  log.unshift(row); log=log.slice(0,1000); localStorage.setItem(STORE_KEYS.log, JSON.stringify(log)); renderLog();
+}
+function renderLog(){
+  $('logBody').innerHTML = log.map(r=>`<tr><td>${escapeHtml(r.time)}</td><td>${escapeHtml(r.lot)}</td><td>${escapeHtml(r.result)}</td><td>${escapeHtml(String(r.align))}</td><td>${escapeHtml(r.size)}</td><td>${escapeHtml(r.perimeter)}</td><td>${escapeHtml(r.area)}</td><td>${escapeHtml(r.reason)}</td></tr>`).join('');
+  const ok=log.filter(r=>r.result==='APROBADO').length, bad=log.filter(r=>r.result==='RECHAZADO').length, total=log.length;
+  $('okCount').textContent=ok; $('badCount').textContent=bad; $('totalCount').textContent=total; $('okPct').textContent=total?`${Math.round(ok/total*100)}%`:'--';
+  sendMonitor({type:'log', log:log.slice(0,100), counts:{ok,bad,total}});
+}
+
+function exportCSV(){
+  const head='Hora,Lote,Resultado,Alineacion,Tamano_cm,Perimetro_cm,Area_cm2,Motivo\n';
+  const body=log.map(r=>[r.time,r.lot,r.result,r.align,r.size,r.perimeter,r.area,`"${String(r.reason).replaceAll('"','""')}"`].join(',')).join('\n');
+  const blob=new Blob([head+body],{type:'text/csv;charset=utf-8'}); const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='historial_inspector_parches_v9.csv'; a.click();
+}
+function escapeHtml(s){ return String(s).replace(/[&<>"]/g, ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[ch])); }
+
+function toggleAuto(){
+  autoMode=!autoMode; $('btnAuto').dataset.active=String(autoMode); $('btnAuto').textContent='Auto: '+(autoMode?'ON':'OFF');
+  toast(autoMode?'Auto activo: registra cuando cambie la pieza':'Auto detenido');
+  lastLoggedSignature='';
+  sendMonitorState();
+}
+
+
+// Monitor PC via PeerJS, vinculación por código ABC1234
+async function connectMonitor(){
+  let raw = $('monitorId').value.trim().toUpperCase().replace(/[^A-Z0-9]/g,'');
+  if(!/^[A-Z]{3}\d{4}$/.test(raw)){ toast('Código inválido. Debe verse como ABC1234.'); return; }
+  $('monitorId').value = raw;
+  const targetId = PEER_PREFIX + raw.toLowerCase();
+  if(typeof Peer === 'undefined'){ toast('PeerJS no cargó. Revisa internet.'); return; }
+  try{
+    if(peer){ try{ peer.destroy(); }catch(e){} }
+    peer = new Peer(undefined,{debug:0});
+    peer.on('error', e=>{ console.error(e); setBadge('monitorStatus','Error PC','bad'); toast('Error de enlace PC: '+(e.type||e.message||e)); });
+    await peerReady(peer);
+    monitorConn = peer.connect(targetId, {reliable:true});
+    setupMonitorConn(monitorConn);
+    monitorConn.on('open', ()=>{
+      setBadge('monitorStatus','PC conectado','ok');
+      toast('Monitor PC conectado');
+      sendMonitor({type:'hello', from:'phone', imageSize:{w:capture.width,h:capture.height}});
+      sendMonitorState();
+      renderLog();
+      if(stream){ try{ monitorCall = peer.call(targetId, stream); }catch(e){ console.warn(e); } }
     });
-  });
-  peer.on('error',err=>{ console.error(err); $('pcStatus').textContent='Error de conexión: '+err.type; toast('Error PC: '+err.type); });
+    monitorConn.on('close', ()=> setBadge('monitorStatus','PC desconectado','warn'));
+  }catch(e){ console.error(e); setBadge('monitorStatus','Error PC','bad'); toast('No conectó con PC'); }
 }
-function setupConn(conn){
-  conn.on('data',msg=>{
-    if(msg?.type==='command') handlePcCommand(msg.cmd,msg.payload);
-    if(msg?.type==='config') { applyConfig(msg.config); toast('Configuración recibida desde PC'); }
+function setupMonitorConn(conn){
+  conn.on('data', msg=>{
+    if(!msg) return;
+    if(msg.type==='command') handlePcCommand(msg.cmd, msg.payload);
+    if(msg.type==='config') applyRemoteConfig(msg.config);
   });
-  conn.on('close',()=>{ $('pcStatus').textContent='PC desconectado'; });
 }
 function handlePcCommand(cmd,payload){
   switch(cmd){
-    case 'detectCard': detectCard(false); break;
-    case 'takeReference': takeReference(); break;
-    case 'measureNow': analyzePatch(true,false); break;
+    case 'startCamera': startCamera(); break;
+    case 'switchCamera': switchCamera(); break;
+    case 'detectCard': calibrateFromCard(true); break;
+    case 'takeReference': saveReference(); break;
+    case 'measureNow': analyzeAndMaybeRecord(true); break;
     case 'toggleAuto': toggleAuto(); break;
-    case 'resetLog': resetLog(); break;
-    case 'startCamera': toast('Por iPhone, inicia cámara desde el celular si no abre remoto.'); startCamera(); break;
-    case 'applyConfig': applyConfig(payload); break;
+    case 'resetLog': log=[]; localStorage.removeItem(STORE_KEYS.log); renderLog(); toast('Conteo reiniciado desde PC'); break;
+    case 'clearReference': reference=null; localStorage.removeItem(STORE_KEYS.ref); renderReferenceState(); toast('Referencia borrada desde PC'); break;
+    case 'recalibrate': calibration=null; localStorage.removeItem(STORE_KEYS.cal); renderCalibrationState(); toast('Calibración borrada desde PC'); break;
+    case 'applyConfig': applyRemoteConfig(payload); break;
   }
 }
-function toggleAuto(){ autoMode=!autoMode; $('btnAuto').dataset.active=String(autoMode); $('btnAuto').textContent='Auto: '+(autoMode?'ON':'OFF'); toast(autoMode?'Auto activo':'Auto detenido'); sendState(); }
+function peerReady(p){ return new Promise(resolve=>{ if(p.open) resolve(); else p.on('open', resolve); }); }
+function sendMonitor(obj){ if(monitorConn?.open) { try{ monitorConn.send(obj); }catch(e){ console.warn('send monitor',e); } } }
+function sendMonitorPayload(res){
+  const payload={
+    type:'analysis', stage:res.stage, result:res.result, pass:res.pass, reason:res.reason,
+    imageSize:res.imageSize, shapes:res.shapes, score:res.score,
+    patch: res.patch?{widthCm:res.patch.widthMm/10,heightCm:res.patch.heightMm/10,perimeterCm:res.patch.perimeterMm/10,areaCm2:res.patch.areaMm2/100,angleDeg:res.patch.angleDeg}:null,
+    text: res.text?{alignmentScore:res.text.alignmentScore, offsetMm:res.text.errXmm ?? res.text.offsetXmm, verticalMm:res.text.errYmm ?? res.text.offsetYmm, angleDeg:res.text.errAngleDeg ?? res.text.angleDeg, baseToTextMm:res.text.baseToTextMm, errBaseToTextMm:res.text.errBaseToTextMm, margins:{leftMm:res.text.marginLeftMm,rightMm:res.text.marginRightMm}}:null
+  };
+  sendMonitor(payload);
+}
 
-// Eventos UI
-$('btnStart').onclick=()=>startCamera();
-$('btnSwitch').onclick=()=>switchCamera();
-$('btnConnectPc').onclick=()=>connectPc();
-$('btnDetectCard').onclick=()=>detectCard(false);
-$('btnTakeRef').onclick=()=>takeReference();
-$('btnMeasure').onclick=()=>analyzePatch(true,false);
-$('btnAuto').onclick=()=>toggleAuto();
-$('btnReset').onclick=()=>resetLog();
-$('btnExport').onclick=()=>exportCSV();
-$('btnSendConfig').onclick=()=>sendState();
-$('photoInput').onchange=async ev=>{ const f=ev.target.files?.[0]; if(!f) return; if(!requireCV()) return; await loadPhoto(f); toast('Foto cargada. Puedes detectar tarjeta o medir.'); };
-['validateText','validateSize','validateShape','minScore','maxErrX','maxErrY','maxErrBase','maxTextAngle','sizeTolPct','textZoneStart','textZoneEnd'].forEach(id=>$(id).addEventListener('change',sendState));
+// Overlay drawing
+function drawOverlay(res){
+  const cw=overlay.clientWidth, ch=overlay.clientHeight;
+  octx.clearRect(0,0,cw,ch);
+  if(usingPhoto && workCanvas.width){ octx.drawImage(workCanvas,0,0,cw,ch); }
+  if(!res?.shapes?.length) return;
+  const imgW=res.imageSize?.w || capture.width || video.videoWidth || 1;
+  const imgH=res.imageSize?.h || capture.height || video.videoHeight || 1;
+  const fit = containFit(imgW,imgH,cw,ch);
+  octx.save();
+  octx.translate(fit.x,fit.y); octx.scale(fit.s,fit.s);
+  res.shapes.forEach(s=>drawShape(octx,s));
+  octx.restore();
+}
+function containFit(iw,ih,cw,ch){ const s=Math.min(cw/iw,ch/ih); return {s,x:(cw-iw*s)/2,y:(ch-ih*s)/2}; }
+function drawShape(ctx,s){
+  ctx.lineWidth=3/((ctx.getTransform?.().a)||1); ctx.strokeStyle=s.color||'#24d18f'; ctx.fillStyle=s.color||'#24d18f'; ctx.font=`${15/((ctx.getTransform?.().a)||1)}px system-ui`;
+  if(s.type==='poly' && s.pts?.length){ ctx.beginPath(); s.pts.forEach((p,i)=>i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y)); ctx.closePath(); ctx.stroke(); if(s.label) ctx.fillText(s.label, s.pts[0].x+5, s.pts[0].y-7); }
+  if(s.type==='point'){ ctx.beginPath(); ctx.arc(s.x,s.y,6,0,Math.PI*2); ctx.fill(); if(s.label) ctx.fillText(s.label,s.x+8,s.y-8); }
+  if(s.type==='cross'){ const r=12; ctx.beginPath(); ctx.moveTo(s.x-r,s.y); ctx.lineTo(s.x+r,s.y); ctx.moveTo(s.x,s.y-r); ctx.lineTo(s.x,s.y+r); ctx.stroke(); if(s.label) ctx.fillText(s.label,s.x+8,s.y-8); }
+  if(s.type==='line'){ ctx.beginPath(); ctx.moveTo(s.x1,s.y1); ctx.lineTo(s.x2,s.y2); ctx.stroke(); if(s.label) ctx.fillText(s.label,s.x1+5,s.y1-7); }
+}
 
-// Inicialización
-renderLog();
-if(calibration) setStep('stepCard','ok',`Calibración guardada ${fmt(calibration.confidence,0)}%`);
-if(reference) setStep('stepRef','ok','Referencia guardada');
-window.addEventListener('opencv-ready',()=>toast('OpenCV listo'));
-setTimeout(()=>{ if(!window.cvReady) $('cameraHelp').textContent='Cargando OpenCV... si tarda mucho, revisa internet.'; },2500);
+// OpenCV helpers
+function matPoints(mat){
+  const pts=[]; const data = mat.data32S?.length ? mat.data32S : mat.data32F;
+  for(let i=0;i<mat.rows;i++) pts.push({x:data[i*2], y:data[i*2+1]});
+  return pts;
+}
+function contourToPoints(contour, ox=0, oy=0, step=1){
+  const pts=[]; const data=contour.data32S;
+  for(let i=0;i<contour.rows;i+=step) pts.push({x:data[i*2]+ox,y:data[i*2+1]+oy});
+  return pts;
+}
+function orderQuad(pts){
+  const c=quadCenter(pts);
+  const arr=pts.map(p=>({...p, a:Math.atan2(p.y-c.y,p.x-c.x)})).sort((a,b)=>a.a-b.a);
+  // sorted around center; choose top-left first
+  let ordered=[arr[0],arr[1],arr[2],arr[3]].map(({x,y})=>({x,y}));
+  const sums=ordered.map(p=>p.x+p.y); const idx=sums.indexOf(Math.min(...sums));
+  ordered=[...ordered.slice(idx),...ordered.slice(0,idx)];
+  // Ensure order is TL,TR,BR,BL clockwise
+  if(cross(ordered[0],ordered[1],ordered[2])<0) ordered=[ordered[0],ordered[3],ordered[2],ordered[1]];
+  return ordered;
+}
+function cross(a,b,c){ return (b.x-a.x)*(c.y-a.y)-(b.y-a.y)*(c.x-a.x); }
+function quadCenter(pts){ return {x:pts.reduce((s,p)=>s+p.x,0)/pts.length, y:pts.reduce((s,p)=>s+p.y,0)/pts.length}; }
+function quadInBounds(pts,w,h){ return pts.every(p=>p.x>=-10&&p.y>=-10&&p.x<=w+10&&p.y<=h+10); }
+function sideStats(pts){ const sides=[dist(pts[0],pts[1]),dist(pts[1],pts[2]),dist(pts[2],pts[3]),dist(pts[3],pts[0])]; return {sides,min:Math.min(...sides),max:Math.max(...sides)}; }
+function dist(a,b){ return Math.hypot(a.x-b.x,a.y-b.y); }
+function warpQuad(src, pts, w, h){
+  const srcTri=cv.matFromArray(4,1,cv.CV_32FC2,[pts[0].x,pts[0].y, pts[1].x,pts[1].y, pts[2].x,pts[2].y, pts[3].x,pts[3].y]);
+  const dstTri=cv.matFromArray(4,1,cv.CV_32FC2,[0,0, w,0, w,h, 0,h]);
+  const M=cv.getPerspectiveTransform(srcTri,dstTri); const dst=new cv.Mat();
+  cv.warpPerspective(src,dst,M,new cv.Size(w,h),cv.INTER_LINEAR,cv.BORDER_CONSTANT,new cv.Scalar());
+  srcTri.delete(); dstTri.delete(); M.delete(); return dst;
+}
+function homographyArray(srcPts, dstPts){
+  const src=cv.matFromArray(4,1,cv.CV_32FC2,[srcPts[0].x,srcPts[0].y, srcPts[1].x,srcPts[1].y, srcPts[2].x,srcPts[2].y, srcPts[3].x,srcPts[3].y]);
+  const dst=cv.matFromArray(4,1,cv.CV_32FC2,[dstPts[0].x,dstPts[0].y, dstPts[1].x,dstPts[1].y, dstPts[2].x,dstPts[2].y, dstPts[3].x,dstPts[3].y]);
+  const M=cv.getPerspectiveTransform(src,dst); const arr=Array.from(M.data64F?.length?M.data64F:M.data32F);
+  src.delete(); dst.delete(); M.delete(); return arr;
+}
+function transformPoint(h,x,y){ const den=h[6]*x+h[7]*y+h[8]; return {x:(h[0]*x+h[1]*y+h[2])/den, y:(h[3]*x+h[4]*y+h[5])/den}; }
+function polygonArea(pts){ let s=0; for(let i=0;i<pts.length;i++){ const a=pts[i], b=pts[(i+1)%pts.length]; s += a.x*b.y-b.x*a.y; } return s/2; }
+function polygonPerimeter(pts){ let s=0; for(let i=0;i<pts.length;i++) s+=dist(pts[i],pts[(i+1)%pts.length]); return s; }
+function normalizeRectAngle(angle,w,h){ let a=angle; if(w<h) a=angle+90; if(a>45)a-=90; if(a<-45)a+=90; return a; }
+function normalizeAngleDelta(a){ while(a>90)a-=180; while(a<-90)a+=180; return a; }
+function drawMatToCanvas(mat, canvasId){
+  const canvas=$(canvasId); if(!canvas) return;
+  try{ cv.imshow(canvas, mat); }catch(e){ console.warn('debug draw fail', canvasId, e); }
+}

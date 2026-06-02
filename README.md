@@ -1,9 +1,18 @@
-# Inspector de Parches Pro v10
+# Inspector de Parches Pro v11
 
-Versión con vinculación PC mediante código de 3 letras + 4 dígitos. El iPhone captura y analiza; la PC monitorea, muestra líneas/recuadros y puede manipular parámetros.
+Versión basada en la v9 (la que tenía mejor monitoreo en vivo) con mejoras de trabajo:
 
-## Archivos para GitHub Pages
-Subir a la raíz del repositorio:
+- Vinculación PC ↔ iPhone por código de 3 letras + 4 dígitos.
+- Video real del iPhone en la PC mediante WebRTC.
+- Overlays sobre el video en la PC: silueta, caja del parche, caja de texto, centro de parche, centro de texto, márgenes y Base a Texto.
+- Control desde PC: iniciar cámara, detectar tarjeta, tomar referencia 100%, medir, activar Auto, borrar referencia, borrar calibración y reiniciar conteo.
+- La referencia aprobada funciona como marco cero / 100%.
+- El texto no se lee con OCR; se mide como bloque visual.
+- La tarjeta 7×7 / 5×5 se usa para calibración de escala y perspectiva.
+
+## Archivos que deben subirse a GitHub Pages
+
+Subir estos archivos sueltos a la raíz del repositorio:
 
 - index.html
 - app.js
@@ -13,32 +22,26 @@ Subir a la raíz del repositorio:
 - plantilla_calibracion.html
 - README.md
 
-## Flujo
+No subir el ZIP ni una carpeta contenedora.
 
-1. Abrir `monitor.html` en PC.
-2. Copiar el código generado, ejemplo `ABC1234`.
-3. Abrir `index.html` en iPhone desde GitHub Pages.
-4. Escribir el código y conectar.
-5. Iniciar cámara en iPhone.
-6. Detectar tarjeta 7×7 exterior blanco / 5×5 interior negro.
-7. Retirar tarjeta sin mover el celular.
-8. Colocar parche bueno y tomar referencia 100%.
-9. Auditar. La PC muestra video, diagnóstico y resultados.
+## Uso recomendado
 
-## Conceptos
+1. En PC abrir `monitor.html?v=11`.
+2. Copiar el código generado, por ejemplo `ABC1234`.
+3. En iPhone abrir `index.html?v=11` o la URL de GitHub Pages.
+4. Escribir el código en el iPhone y conectar PC.
+5. Iniciar cámara desde iPhone si iOS no permite iniciarla desde PC.
+6. Colocar tarjeta 7×7 exterior blanco / 5×5 interior negro.
+7. Detectar tarjeta.
+8. Retirar tarjeta sin mover celular.
+9. Colocar parche bueno y tomar referencia 100%.
+10. Medir o activar Auto.
 
-- La tarjeta 7×7 / 5×5 solo calibra escala y perspectiva.
-- La referencia 100% define el patrón maestro.
-- El texto no se lee con OCR: se mide como bloque gráfico.
-- Base a Texto = distancia entre la base inferior del bordado/gráfico y el borde superior del bloque de texto.
+## Recomendación inicial de criterios
 
-## Recomendación inicial
-
-- Texto alineado: ON
-- Tamaño: OFF
-- Área/perímetro: OFF
+- Rechazar por texto no alineado: ON
+- Rechazar por tamaño: OFF
+- Rechazar por área/perímetro: OFF
 - Mínimo aceptable: 85%
-- Error horizontal máx.: 3 mm
-- Error vertical máx.: 3 mm
-- Error Base a Texto máx.: 2.5 mm
-- Ángulo texto máx.: 5°
+
+Cuando la detección sea estable, activar tamaño y área/perímetro.
