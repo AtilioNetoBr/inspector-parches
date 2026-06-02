@@ -4,13 +4,13 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="theme-color" content="#07101f" />
-  <title>Inspector de Parches Pro v4.1 | Mardur</title>
-  <link rel="stylesheet" href="styles.css?v=4.1" />
+  <title>Inspector de Parches Pro v4.2 | Mardur</title>
+  <link rel="stylesheet" href="styles.css?v=4.2" />
 </head>
 <body>
   <header class="app-header">
     <div>
-      <h1>Inspector de Parches Pro v4.1</h1>
+      <h1>Inspector de Parches Pro v4.2</h1>
       <p>Calibra con cuadro 5×5 cm, retíralo, toma una referencia aprobada y audita por tamaño, forma y texto centrado.</p>
     </div>
     <div class="status-stack">
@@ -38,14 +38,15 @@
 
       <div class="controls main-controls">
         <button id="btnStart" class="primary">Iniciar cámara</button>
-        <button id="btnCalibrate" class="secondary">Calibrar con cuadro 5×5</button>
+        <button id="btnCalibrate" class="secondary">Calibrar automático 5×5</button>
+        <button id="btnCalibrateManual" class="secondary">Calibrar manual 4 esquinas</button>
         <button id="btnReference" class="secondary">Tomar referencia aprobada</button>
         <button id="btnMeasure">Medir ahora</button>
         <button id="btnAuto" data-active="false">Auto: OFF</button>
       </div>
 
       <div class="instructions">
-        <strong>Flujo recomendado:</strong> coloca el cuadro negro 5×5 cm sobre la mesa, calibra, retira el cuadro sin mover el celular, coloca un parche bueno, toma referencia y después audita.
+        <strong>Flujo recomendado:</strong> coloca el cuadro negro 5×5 cm sobre la mesa, calibra automático. Si no lo detecta, usa “manual 4 esquinas”. Retira el cuadro sin mover el celular, coloca un parche bueno, toma referencia y después audita.
       </div>
     </section>
 
@@ -173,7 +174,7 @@
       }
     };
   </script>
-  <script src="app.js?v=4.1"></script>
+  <script src="app.js?v=4.2"></script>
   <script async src="https://docs.opencv.org/4.x/opencv.js"></script>
 </body>
 </html>

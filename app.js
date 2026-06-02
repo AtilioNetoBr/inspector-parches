@@ -26,6 +26,8 @@
   let stableFrames = 0;
   let lastSignature = null;
   let lastAutoProcess = 0;
+  let manualCalibrationHandler = null;
+  let manualCalibrationPoints = [];
 
   function safeJson(raw, fallback) {
     try { return raw ? JSON.parse(raw) : fallback; } catch { return fallback; }
@@ -241,80 +243,260 @@
   function calibrateWithSquare() {
     if (!cvIsReady()) return toast('OpenCV aún está cargando. Espera unos segundos.', 2600);
     if (!grabFrame()) return toast('Primero inicia la cámara. Sí, la parte aburrida pero necesaria.');
+    cancelManualCalibration(false);
 
-    let src = null, gray = null, blur = null, mask = null, contours = null, hierarchy = null;
+    let src = null;
     try {
       src = cv.imread(els.frame);
-      gray = new cv.Mat();
-      blur = new cv.Mat();
-      mask = new cv.Mat();
-      contours = new cv.MatVector();
-      hierarchy = new cv.Mat();
-
-      cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
-      cv.GaussianBlur(gray, blur, new cv.Size(5, 5), 0);
-      cv.threshold(blur, mask, 85, 255, cv.THRESH_BINARY_INV);
-      const kernel = cv.Mat.ones(5, 5, cv.CV_8U);
-      cv.morphologyEx(mask, mask, cv.MORPH_CLOSE, kernel);
-      kernel.delete();
-      cv.findContours(mask, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
-
-      const frameArea = els.frame.width * els.frame.height;
-      let best = null;
-
-      for (let i = 0; i < contours.size(); i++) {
-        const c = contours.get(i);
-        const area = cv.contourArea(c);
-        if (area < frameArea * 0.002 || area > frameArea * 0.45) { c.delete(); continue; }
-        const peri = cv.arcLength(c, true);
-        const approx = new cv.Mat();
-        cv.approxPolyDP(c, approx, 0.035 * peri, true);
-        const rect = cv.minAreaRect(c);
-        const rw = rect.size.width;
-        const rh = rect.size.height;
-        const ratio = rw > rh ? rw / Math.max(rh, 1) : rh / Math.max(rw, 1);
-        const rectArea = Math.max(rw * rh, 1);
-        const fill = area / rectArea;
-        const touches = rectTouchesEdge(rect, els.frame.width, els.frame.height, 10);
-        const isSquareish = ratio >= 0.78 && ratio <= 1.28;
-        const isSolid = fill > 0.55;
-        const isQuadish = approx.rows >= 4 && approx.rows <= 8;
-        if (isSquareish && isSolid && isQuadish && !touches) {
-          const score = area * (1 - Math.abs(1 - ratio)) * fill;
-          if (!best || score > best.score) {
-            if (best && best.contour) best.contour.delete();
-            best = { contour: c, rect, area, score };
-          } else {
-            c.delete();
-          }
-        } else {
-          c.delete();
-        }
-        approx.delete();
-      }
+      const best = findCalibrationSquare(src);
 
       if (!best) {
-        setDecision('bad', 'NO CALIBRADO', 'No encontré un cuadro negro claro. Usa cuadro negro 5×5 cm con borde blanco y buena luz.');
-        return toast('No detecté el cuadro 5×5. Acércalo al centro y evita sombras.', 3200);
+        setDecision('bad', 'NO CALIBRADO', 'No encontré el cuadro negro 5×5. Usa el botón “Calibrar manual 4 esquinas” y toca las 4 esquinas del cuadro.');
+        toast('No detecté el cuadro. Usa manual 4 esquinas o mejora contraste/luz.', 4200);
+        return;
       }
 
-      const pts = cv.RotatedRect.points(best.rect).map(p => ({ x: p.x, y: p.y }));
-      const avgPx = (best.rect.size.width + best.rect.size.height) / 2;
       const squareMm = cfg().squareMm;
-      pxPerMm = avgPx / squareMm;
+      pxPerMm = best.sidePx / squareMm;
       localStorage.setItem('patchInspectorV4.pxPerMm', String(pxPerMm));
-      const angle = normalizeAngle(best.rect.angle, best.rect.size.width, best.rect.size.height);
-      drawPolygon(pts, '#ffd166', 'CUADRO 5×5 DETECTADO');
-      setDecision('ok', 'CALIBRADO', `Escala guardada: ${pxPerMm.toFixed(3)} px/mm. Retira el cuadro sin mover el celular.`);
-      toast(`Calibrado: ${pxPerMm.toFixed(3)} px/mm. Ahora retira el cuadro.`, 3400);
-      best.contour.delete();
+      drawPolygon(best.points, '#ffd166', `CUADRO 5×5 DETECTADO · T${best.threshold}`);
+      setDecision('ok', 'CALIBRADO', `Escala guardada: ${pxPerMm.toFixed(3)} px/mm. Lado detectado: ${best.sidePx.toFixed(1)} px. Retira el cuadro sin mover el celular.`);
+      toast(`Calibrado: ${pxPerMm.toFixed(3)} px/mm. Ahora retira el cuadro.`, 3600);
       updateStatus();
       setWorkflow();
     } catch (err) {
       console.error(err);
-      toast('Error calibrando. El navegador eligió drama, pero revisa contraste y luz.', 3300);
+      setDecision('bad', 'ERROR CALIBRANDO', 'Falló la calibración automática. Usa “manual 4 esquinas”.');
+      toast('Error calibrando automático. Usa manual 4 esquinas.', 3300);
     } finally {
-      deleteAll(src, gray, blur, mask, contours, hierarchy);
+      deleteAll(src);
+    }
+  }
+
+  function findCalibrationSquare(src) {
+    let gray = null, blur = null, mask = null, contours = null, hierarchy = null;
+    let best = null;
+    try {
+      gray = new cv.Mat();
+      blur = new cv.Mat();
+      cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+      cv.GaussianBlur(gray, blur, new cv.Size(5, 5), 0);
+
+      const thresholds = [45, 60, 75, 90, 110, 130, 155, 180];
+      for (const thresholdValue of thresholds) {
+        const candidate = findSquareCandidateFromThreshold(blur, thresholdValue, src.cols, src.rows);
+        if (candidate && (!best || candidate.score > best.score)) best = candidate;
+      }
+
+      // Fallback con umbral adaptativo. Es útil cuando hay sombras o luz desigual.
+      mask = new cv.Mat();
+      contours = new cv.MatVector();
+      hierarchy = new cv.Mat();
+      cv.adaptiveThreshold(blur, mask, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 41, 7);
+      const adaptiveCandidate = bestSquareFromMask(mask, blur, src.cols, src.rows, 'A');
+      if (adaptiveCandidate && (!best || adaptiveCandidate.score > best.score)) best = adaptiveCandidate;
+      return best;
+    } finally {
+      deleteAll(gray, blur, mask, contours, hierarchy);
+    }
+  }
+
+  function findSquareCandidateFromThreshold(grayBlur, thresholdValue, width, height) {
+    let mask = null;
+    try {
+      mask = new cv.Mat();
+      cv.threshold(grayBlur, mask, thresholdValue, 255, cv.THRESH_BINARY_INV);
+      return bestSquareFromMask(mask, grayBlur, width, height, thresholdValue);
+    } finally {
+      deleteAll(mask);
+    }
+  }
+
+  function bestSquareFromMask(mask, grayBlur, width, height, thresholdLabel) {
+    let work = null, contours = null, hierarchy = null, kernel3 = null, kernel5 = null;
+    let best = null;
+    try {
+      work = new cv.Mat();
+      mask.copyTo(work);
+      kernel3 = cv.Mat.ones(3, 3, cv.CV_8U);
+      kernel5 = cv.Mat.ones(5, 5, cv.CV_8U);
+      cv.morphologyEx(work, work, cv.MORPH_OPEN, kernel3);
+      cv.morphologyEx(work, work, cv.MORPH_CLOSE, kernel5);
+      contours = new cv.MatVector();
+      hierarchy = new cv.Mat();
+      cv.findContours(work, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+
+      const frameArea = width * height;
+      const minArea = frameArea * 0.00008; // más permisivo para cuadros pequeños/lejanos
+      const maxArea = frameArea * 0.30;
+      const frameCenter = { x: width / 2, y: height / 2 };
+      const maxDist = Math.hypot(width / 2, height / 2);
+
+      for (let i = 0; i < contours.size(); i++) {
+        const contour = contours.get(i);
+        try {
+          const area = cv.contourArea(contour);
+          if (area < minArea || area > maxArea) continue;
+
+          const rect = cv.minAreaRect(contour);
+          if (rectTouchesEdge(rect, width, height, 2)) continue;
+
+          const rw = Math.max(rect.size.width, 1);
+          const rh = Math.max(rect.size.height, 1);
+          const ratio = rw > rh ? rw / rh : rh / rw;
+          if (ratio > 1.45) continue;
+
+          const rectArea = Math.max(rw * rh, 1);
+          const fill = area / rectArea;
+          if (fill < 0.42) continue;
+
+          const peri = cv.arcLength(contour, true);
+          const approx = new cv.Mat();
+          cv.approxPolyDP(contour, approx, 0.03 * peri, true);
+          const approxRows = approx.rows;
+          approx.delete();
+          if (approxRows < 4 || approxRows > 12) continue;
+
+          const points = cv.RotatedRect.points(rect).map(p => ({ x: p.x, y: p.y }));
+          const ordered = orderPoints(points);
+          const sideTop = distance(ordered.tl, ordered.tr);
+          const sideBottom = distance(ordered.bl, ordered.br);
+          const sideLeft = distance(ordered.tl, ordered.bl);
+          const sideRight = distance(ordered.tr, ordered.br);
+          const sidePx = (sideTop + sideBottom + sideLeft + sideRight) / 4;
+          if (!Number.isFinite(sidePx) || sidePx < 12) continue;
+
+          const darkness = darknessScore(grayBlur, rect);
+          if (darkness.mean > 175) continue;
+
+          const centerDist = Math.hypot(rect.center.x - frameCenter.x, rect.center.y - frameCenter.y);
+          const centerBoost = 0.75 + 0.25 * (1 - Math.min(centerDist / maxDist, 1));
+          const squareScore = Math.max(0.2, 1 - Math.abs(1 - ratio));
+          const darkBoost = Math.max(0.25, (220 - darkness.mean) / 220);
+          const score = area * squareScore * fill * darkBoost * centerBoost;
+
+          if (!best || score > best.score) {
+            best = { rect, points, area, sidePx, score, fill, ratio, mean: darkness.mean, threshold: thresholdLabel };
+          }
+        } finally {
+          contour.delete();
+        }
+      }
+      return best;
+    } finally {
+      deleteAll(work, contours, hierarchy, kernel3, kernel5);
+    }
+  }
+
+  function darknessScore(gray, rect) {
+    let roi = null;
+    try {
+      const b = boundingRectFromRotatedRect(rect, gray.cols, gray.rows);
+      roi = gray.roi(new cv.Rect(b.x, b.y, b.w, b.h));
+      const mean = cv.mean(roi)[0];
+      return { mean };
+    } catch {
+      return { mean: 255 };
+    } finally {
+      deleteAll(roi);
+    }
+  }
+
+  function boundingRectFromRotatedRect(rect, width, height) {
+    const pts = cv.RotatedRect.points(rect);
+    const xs = pts.map(p => p.x);
+    const ys = pts.map(p => p.y);
+    const minX = Math.max(0, Math.floor(Math.min(...xs)));
+    const minY = Math.max(0, Math.floor(Math.min(...ys)));
+    const maxX = Math.min(width - 1, Math.ceil(Math.max(...xs)));
+    const maxY = Math.min(height - 1, Math.ceil(Math.max(...ys)));
+    return { x: minX, y: minY, w: Math.max(1, maxX - minX), h: Math.max(1, maxY - minY) };
+  }
+
+  function calibrateManualFourCorners() {
+    if (!grabFrame()) return toast('Primero inicia la cámara.');
+    cancelManualCalibration(false);
+    manualCalibrationPoints = [];
+    setDecision('neutral', 'CALIBRACIÓN MANUAL', 'Toca las 4 esquinas del cuadro negro 5×5 cm. No toques el borde blanco.');
+    toast('Toca las 4 esquinas del cuadro negro, en cualquier orden.', 3600);
+    drawManualPoints();
+
+    manualCalibrationHandler = (ev) => {
+      ev.preventDefault();
+      const pt = overlayPointToFrame(ev);
+      if (!pt) return;
+      manualCalibrationPoints.push(pt);
+      drawManualPoints();
+      if (manualCalibrationPoints.length >= 4) finishManualCalibration();
+    };
+    els.overlay.addEventListener('click', manualCalibrationHandler);
+  }
+
+  function overlayPointToFrame(ev) {
+    const rect = els.overlay.getBoundingClientRect();
+    const clientX = ev.clientX ?? (ev.touches && ev.touches[0] && ev.touches[0].clientX);
+    const clientY = ev.clientY ?? (ev.touches && ev.touches[0] && ev.touches[0].clientY);
+    if (!Number.isFinite(clientX) || !Number.isFinite(clientY)) return null;
+    return {
+      x: (clientX - rect.left) * els.frame.width / rect.width,
+      y: (clientY - rect.top) * els.frame.height / rect.height
+    };
+  }
+
+  function drawManualPoints() {
+    clearOverlay();
+    const sx = els.overlay.clientWidth / Math.max(1, els.frame.width);
+    const sy = els.overlay.clientHeight / Math.max(1, els.frame.height);
+    ctx.save();
+    ctx.fillStyle = '#ffd166';
+    ctx.strokeStyle = '#ffd166';
+    ctx.lineWidth = 3;
+    ctx.font = '700 16px system-ui';
+    ctx.fillText(`Toca esquinas: ${manualCalibrationPoints.length}/4`, 18, 30);
+    manualCalibrationPoints.forEach((p, idx) => {
+      const x = p.x * sx, y = p.y * sy;
+      ctx.beginPath();
+      ctx.arc(x, y, 8, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillText(String(idx + 1), x + 10, y - 10);
+    });
+    ctx.restore();
+  }
+
+  function finishManualCalibration() {
+    cancelManualCalibration(false);
+    if (manualCalibrationPoints.length < 4) return;
+    const ordered = orderPoints(manualCalibrationPoints);
+    const sideTop = distance(ordered.tl, ordered.tr);
+    const sideBottom = distance(ordered.bl, ordered.br);
+    const sideLeft = distance(ordered.tl, ordered.bl);
+    const sideRight = distance(ordered.tr, ordered.br);
+    const sidePx = (sideTop + sideBottom + sideLeft + sideRight) / 4;
+    if (!Number.isFinite(sidePx) || sidePx < 10) {
+      setDecision('bad', 'NO CALIBRADO', 'Los puntos quedaron demasiado cerca. Repite tocando las 4 esquinas del cuadro negro.');
+      toast('Puntos inválidos. Repite la calibración manual.', 3000);
+      manualCalibrationPoints = [];
+      return;
+    }
+    pxPerMm = sidePx / cfg().squareMm;
+    localStorage.setItem('patchInspectorV4.pxPerMm', String(pxPerMm));
+    const polygon = [ordered.tl, ordered.tr, ordered.br, ordered.bl];
+    drawPolygon(polygon, '#ffd166', 'CALIBRADO MANUAL');
+    setDecision('ok', 'CALIBRADO', `Escala manual guardada: ${pxPerMm.toFixed(3)} px/mm. Lado promedio: ${sidePx.toFixed(1)} px. Retira el cuadro sin mover el celular.`);
+    toast(`Calibrado manual: ${pxPerMm.toFixed(3)} px/mm. Retira el cuadro.`, 3600);
+    manualCalibrationPoints = [];
+    updateStatus();
+    setWorkflow();
+  }
+
+  function cancelManualCalibration(clear = true) {
+    if (manualCalibrationHandler) {
+      els.overlay.removeEventListener('click', manualCalibrationHandler);
+      manualCalibrationHandler = null;
+    }
+    if (clear) {
+      manualCalibrationPoints = [];
+      clearOverlay();
     }
   }
 
@@ -863,6 +1045,7 @@
 
   $('btnStart').addEventListener('click', startCamera);
   $('btnCalibrate').addEventListener('click', calibrateWithSquare);
+  $('btnCalibrateManual').addEventListener('click', calibrateManualFourCorners);
   $('btnReference').addEventListener('click', takeReference);
   $('btnMeasure').addEventListener('click', measureNow);
   $('btnAuto').addEventListener('click', toggleAuto);
