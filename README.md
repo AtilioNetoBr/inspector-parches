@@ -1,63 +1,86 @@
-# Inspector de Parches Pro v8.1
+# Inspector de Parches Pro v9
 
-Webapp para inspección con celular publicada en GitHub Pages.
+Webapp para iPhone + PC orientada a inspección visual de parches/bordados.
 
-## Objetivo
+## Qué valida
 
-- Usar una tarjeta fija de calibración: exterior blanco 7 × 7 cm e interior negro 5 × 5 cm.
-- Detectar la tarjeta automáticamente con threshold de blanco, rectificar perspectiva y validar el negro central.
-- Retirar la tarjeta sin mover el celular.
-- Detectar la silueta del parche.
-- Reportar tamaño X × X cm, perímetro, área, giro del parche.
-- Detectar el bloque de texto, medir márgenes izquierdo/derecho y calcular porcentaje de alineación.
-- Transmitir video y resultados a una PC mediante `monitor.html`.
+- Calibración con tarjeta física:
+  - Exterior blanco: 7 × 7 cm
+  - Interior negro: 5 × 5 cm
+- Corrección de perspectiva con la tarjeta.
+- Detección de silueta del parche.
+- Medición real:
+  - Tamaño X × X cm
+  - Perímetro cm
+  - Área cm²
+  - Giro del parche
+- Detección del bloque visual del texto, sin OCR.
+- Alineación del texto:
+  - centro horizontal
+  - posición vertical
+  - ángulo
+- Porcentaje mínimo editable, por default 85%.
+- Monitor PC en vivo por QR con video, líneas y recuadros.
 
-## Archivos para GitHub Pages
+## Archivos
 
-Subir estos archivos sueltos a la raíz del repositorio:
+Sube estos archivos sueltos a la raíz del repositorio de GitHub Pages:
 
-- `index.html`
-- `app.js`
-- `styles.css`
-- `monitor.html`
-- `monitor.js`
-- `plantilla_calibracion.html`
-- `README.md`
+```text
+index.html
+app.js
+styles.css
+monitor.html
+monitor.js
+plantilla_calibracion.html
+README.md
+```
 
-## Flujo de uso
+No subas el ZIP y no subas una carpeta envolvente.
 
-1. Abrir la página en el celular.
-2. Presionar **Iniciar cámara**.
-3. Colocar la tarjeta 7×7 / 5×5 en la misma zona donde irá el parche.
-4. Presionar **Calibrar tarjeta 7×7 / 5×5**.
-5. Retirar la tarjeta sin mover el celular.
-6. Colocar una pieza buena.
-7. Presionar **Tomar referencia aprobada**.
-8. Dejar activo inicialmente solo: **Rechazar si texto no está alineado**.
-9. Auditar con **Medir ahora** o **Auto: ON**.
+## URL de app
 
-## Recomendaciones de piso
+```text
+https://TUUSUARIO.github.io/inspector-parches/?v=9
+```
 
-- Celular fijo, no en mano.
-- Fondo mate oscuro.
-- Buena luz uniforme.
-- Tarjeta impresa al 100% y verificada con regla.
-- Recalibrar si se mueve el celular, soporte o altura.
+## URL de monitor PC
 
-## Monitor PC
+```text
+https://TUUSUARIO.github.io/inspector-parches/monitor.html?v=9
+```
 
-Abrir en la PC:
+## Flujo recomendado
 
-`monitor.html`
+1. En PC abre `monitor.html`.
+2. Escanea el QR con el iPhone.
+3. En iPhone abre la app.
+4. Presiona **Iniciar cámara**.
+5. En PC debe verse el video.
+6. Coloca la tarjeta blanca 7×7 con negro 5×5.
+7. Presiona **Detectar tarjeta 7×7 / 5×5**.
+8. Retira la tarjeta sin mover el celular.
+9. Coloca un parche bueno.
+10. Presiona **Tomar referencia aprobada**.
+11. Activa **Auto: ON** o usa **Medir ahora**.
 
-Copiar el ID generado y pegarlo en el celular en la sección Monitor PC.
+## Recomendación física
 
-## Nota técnica importante
+- iPhone fijo en soporte.
+- Tarjeta y parches en el mismo plano.
+- Fondo mate, sin brillos.
+- Luz pareja.
+- Tarjeta impresa al 100%, no ajustada a página.
+- Si el celular se mueve, recalibrar.
 
-La tarjeta se usa para calibración. Si se retira, la precisión depende de que el celular quede fijo y de que el parche se mida en la misma zona. Para máxima precisión metrológica, la tarjeta debería poder entrar y salir siempre al mismo plano y posición.
+## Si iPhone no abre cámara
 
+1. Abrir desde GitHub Pages, no desde github.com.
+2. Revisar que la URL empiece con `https://`.
+3. Safari → Configuración del sitio web → Cámara → Permitir.
+4. Cerrar Cámara, WhatsApp, Instagram u otra app que use cámara.
+5. Usar el botón **Analizar foto** como respaldo.
 
-## v8.1
-- Cámara reforzada con más respaldos de permisos, deviceId y mensajes de error.
-- Carga local segura de datos guardados para evitar bloqueo por localStorage corrupto.
-- Usa `?v=8.1` al abrir GitHub Pages para evitar caché.
+## Nota técnica
+
+Esta versión usa OpenCV.js para visión artificial y PeerJS/WebRTC para transmitir video y datos al monitor PC. Requiere internet para cargar esas librerías desde CDN.

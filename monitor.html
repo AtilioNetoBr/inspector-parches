@@ -3,55 +3,58 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Monitor PC | Inspector de Parches</title>
+  <title>Monitor PC | Inspector de Parches Pro v9</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body class="monitor-body">
-  <header class="topbar">
+  <header class="app-header">
     <div>
-      <h1>Monitor PC</h1>
-      <p>Vista en vivo del celular y resultados de inspección.</p>
+      <h1>Monitor PC - Inspector de Parches Pro v9</h1>
+      <p>Escanea el QR con el iPhone. Verás video, líneas analizadas, recuadros y resultados en vivo.</p>
     </div>
-    <span id="peerState" class="badge warn">Generando ID</span>
+    <div class="header-actions">
+      <span id="peerStatus" class="badge warn">Preparando QR…</span>
+      <span id="phoneStatus" class="badge idle">Celular no conectado</span>
+    </div>
   </header>
 
-  <main class="layout monitor-layout">
-    <section class="panel camera-card">
-      <h2>ID del monitor</h2>
-      <div class="monitor-id" id="monitorId">--</div>
-      <p class="small">Copia este ID en el celular y presiona “Transmitir a PC”.</p>
-      <div class="video-wrap monitor-video">
-        <video id="remoteVideo" playsinline autoplay muted></video>
-      </div>
+  <main class="monitor-layout">
+    <section class="monitor-video-wrap">
+      <video id="remoteVideo" autoplay playsinline muted></video>
+      <canvas id="monitorOverlay"></canvas>
     </section>
 
-    <aside class="side">
-      <section class="panel result-panel">
-        <h2>Resultado</h2>
-        <div id="decision" class="decision neutral">ESPERANDO</div>
-        <p id="reason" class="reason">Esperando conexión del celular.</p>
-        <div class="score-wrap">
-          <span>Alineación texto</span>
-          <strong id="alignmentScore">--</strong>
-          <div class="meter"><div id="alignmentBar"></div></div>
-        </div>
+    <aside class="side-panel">
+      <section class="card">
+        <h2>Sincronización por QR</h2>
+        <div id="qrcode" class="qr-box"></div>
+        <p class="small">Abre la cámara del iPhone, escanea este QR y entra a la app. Luego toca “Iniciar cámara”.</p>
+        <div id="appUrl" class="url-box"></div>
       </section>
 
-      <section class="panel">
-        <h2>Mediciones</h2>
+      <section class="card result-card">
+        <h2>Resultado en vivo</h2>
+        <div id="decision" class="decision neutral">ESPERANDO</div>
+        <p id="reason" class="reason">Esperando análisis del celular.</p>
         <div class="metrics grid2">
+          <div><span>Alineación</span><strong id="mAlign">--</strong></div>
           <div><span>Tamaño</span><strong id="mSize">--</strong></div>
           <div><span>Perímetro</span><strong id="mPerimeter">--</strong></div>
           <div><span>Área</span><strong id="mArea">--</strong></div>
-          <div><span>Texto offset</span><strong id="mTextOffset">--</strong></div>
-          <div><span>Márgenes I/D</span><strong id="mTextMargins">--</strong></div>
-          <div><span>Hora</span><strong id="mTime">--</strong></div>
+          <div><span>Offset texto</span><strong id="mOffset">--</strong></div>
+          <div><span>Ángulo texto</span><strong id="mAngle">--</strong></div>
         </div>
+      </section>
+
+      <section class="card data-panel">
+        <h2>Datos recibidos</h2>
+        <pre id="dataLog">Sin datos.</pre>
       </section>
     </aside>
   </main>
 
   <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
   <script src="monitor.js"></script>
 </body>
 </html>
