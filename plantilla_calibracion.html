@@ -3,43 +3,31 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Plantilla de calibración | Inspector de Parches</title>
+<title>Plantilla de calibración 5 x 5 cm</title>
 <style>
-  @page{size:letter;margin:12mm}
-  *{box-sizing:border-box}
-  body{font-family:Arial,sans-serif;margin:0;color:#111;background:white}
-  .page{padding:10mm}
-  h1{font-size:20pt;margin:0 0 4mm}.note{font-size:10pt;margin:0 0 8mm;color:#333;max-width:170mm;line-height:1.35}
-  .cal-line{width:50mm;height:8mm;background:#000;margin:6mm 0 2mm;position:relative}
-  .cal-line::before,.cal-line::after{content:"";position:absolute;top:-4mm;width:.5mm;height:16mm;background:#000}.cal-line::before{left:0}.cal-line::after{right:0}
-  .label{font-size:10pt;font-weight:bold;margin-bottom:8mm}
-  .work-area{width:150mm;height:150mm;border:1.2mm solid #111;background:#111;margin-top:8mm;display:flex;align-items:center;justify-content:center;position:relative;color:#fff;font-weight:bold;letter-spacing:.12em;text-transform:uppercase}
-  .work-area::before{content:"Zona negra mate sugerida";opacity:.55}
-  .corner{position:absolute;width:12mm;height:12mm;border:1mm solid #fff}.tl{top:8mm;left:8mm;border-right:0;border-bottom:0}.tr{top:8mm;right:8mm;border-left:0;border-bottom:0}.bl{bottom:8mm;left:8mm;border-right:0;border-top:0}.br{bottom:8mm;right:8mm;border-left:0;border-top:0}
-  .instructions{font-size:10pt;margin-top:8mm;line-height:1.42;max-width:170mm}
-  @media print{button{display:none}.page{padding:0}}
+  @page { size: letter; margin: 12mm; }
+  * { box-sizing: border-box; }
+  body { font-family: Arial, sans-serif; margin: 0; color: #111; background: white; }
+  .page { min-height: 100vh; display: grid; place-items: center; padding: 20mm; }
+  .card { border: 1px dashed #999; padding: 12mm; text-align: center; }
+  .label { font-size: 14px; margin-bottom: 8mm; }
+  .outer { width: 70mm; height: 70mm; background: #fff; border: 0.35mm solid #111; display: grid; place-items: center; margin: 0 auto; }
+  .square { width: 50mm; height: 50mm; background: #000; }
+  .notes { margin-top: 8mm; font-size: 12px; line-height: 1.4; text-align: left; max-width: 120mm; }
+  button { margin: 16px; padding: 10px 14px; border: 1px solid #444; border-radius: 8px; background: #111; color: white; font-weight: bold; }
+  @media print { button { display: none; } .page { padding: 0; } }
 </style>
 </head>
 <body>
-  <div class="page">
-    <button onclick="window.print()">Imprimir plantilla</button>
-    <h1>Plantilla de calibración</h1>
-    <p class="note">Imprime al 100%, sin “ajustar a página”. Verifica con regla que la barra mida exactamente 50 mm. Si no mide 50 mm en papel, la impresión salió escalada y no sirve para calibrar.</p>
-    <div class="cal-line"></div>
-    <div class="label">Referencia exacta: 50 mm</div>
-    <div class="work-area">
-      <div class="corner tl"></div><div class="corner tr"></div><div class="corner bl"></div><div class="corner br"></div>
-    </div>
-    <div class="instructions">
-      <strong>Uso recomendado:</strong>
-      <ol>
-        <li>Pega esta plantilla o usa una base negra mate equivalente.</li>
-        <li>Fija el celular arriba, lo más perpendicular posible.</li>
-        <li>Abre la app, inicia cámara y toca “Calibrar escala”.</li>
-        <li>Toca los dos extremos de la barra negra de 50 mm.</li>
-        <li>No muevas el celular después de calibrar.</li>
-      </ol>
+<button onclick="window.print()">Imprimir plantilla</button>
+<div class="page">
+  <div class="card">
+    <div class="label"><strong>Plantilla de calibración</strong><br>Cuadro negro: 50 mm × 50 mm · Fondo blanco: 70 mm × 70 mm</div>
+    <div class="outer"><div class="square"></div></div>
+    <div class="notes">
+      <strong>Uso:</strong> imprime al 100%, sin ajustar a página. Verifica con regla que el cuadro negro mida exactamente 5 cm × 5 cm. Recorta dejando el borde blanco visible. Colócalo plano sobre la misma mesa donde se medirá el parche. Calibra y retíralo sin mover el celular.
     </div>
   </div>
+</div>
 </body>
 </html>

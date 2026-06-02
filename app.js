@@ -1,726 +1,800 @@
-/* Inspector de Parches Pro v2.0
-   Funciona en GitHub Pages. Requiere HTTPS para cámara y OpenCV.js para visión.
-*/
-const $ = (id) => document.getElementById(id);
-const video = $('video');
-const overlay = $('overlay');
-const ctx = overlay.getContext('2d');
-const capture = $('captureCanvas');
-const capCtx = capture.getContext('2d', { willReadFrequently: true });
+(() => {
+  'use strict';
 
-const STORAGE = {
-  scale: 'patchInspector.scalePxPerMm.v2',
-  log: 'patchInspector.log.v2',
-  config: 'patchInspector.config.v2',
-  master: 'patchInspector.master.v2'
-};
-
-let stream = null;
-let pxPerMm = Number(localStorage.getItem(STORAGE.scale) || 0);
-let log = safeJSON(localStorage.getItem(STORAGE.log), []);
-let master = safeJSON(localStorage.getItem(STORAGE.master), null);
-let autoMode = false;
-let autoState = 'WAITING';
-let stableResults = [];
-let missingFrames = 0;
-let lastAutoTs = 0;
-let lastDetection = null;
-let lastRecordedSignature = null;
-let opencvReady = false;
-
-const DEFAULT_CONFIG = {
-  lotName: 'Hidalgo', targetW: 65, targetH: 73, tolW: 1.5, tolH: 1.5,
-  tolAngle: 22, refMm: 50, minAreaPct: 0.35, autoDelay: 850,
-  visualMin: 68, shapeMin: 72, useMaster: true
-};
-
-function safeJSON(text, fallback){
-  try { return text ? JSON.parse(text) : fallback; } catch { return fallback; }
-}
-function toast(msg, ms=1900){
-  const t = $('toast');
-  t.textContent = msg;
-  t.classList.add('show');
-  clearTimeout(toast._timer);
-  toast._timer = setTimeout(() => t.classList.remove('show'), ms);
-}
-function setBadge(el, text, cls){
-  el.textContent = text;
-  el.className = `badge ${cls}`;
-}
-function setWork(state, hint){
-  $('workState').textContent = state;
-  if (hint !== undefined) $('workHint').textContent = hint;
-}
-function clamp(n, min, max){ return Math.max(min, Math.min(max, n)); }
-function cfg(){
-  return {
-    lotName: $('lotName').value.trim() || 'Sin lote',
-    targetW: Number($('targetW').value || DEFAULT_CONFIG.targetW),
-    targetH: Number($('targetH').value || DEFAULT_CONFIG.targetH),
-    tolW: Number($('tolW').value || DEFAULT_CONFIG.tolW),
-    tolH: Number($('tolH').value || DEFAULT_CONFIG.tolH),
-    tolAngle: Number($('tolAngle').value || DEFAULT_CONFIG.tolAngle),
-    refMm: Number($('refMm').value || DEFAULT_CONFIG.refMm),
-    minAreaPct: Number($('minAreaPct').value || DEFAULT_CONFIG.minAreaPct),
-    autoDelay: Number($('autoDelay').value || DEFAULT_CONFIG.autoDelay),
-    visualMin: Number($('visualMin').value || DEFAULT_CONFIG.visualMin),
-    shapeMin: Number($('shapeMin').value || DEFAULT_CONFIG.shapeMin),
-    useMaster: $('useMaster').checked
+  const $ = (id) => document.getElementById(id);
+  const els = {
+    video: $('video'), overlay: $('overlay'), frame: $('frameCanvas'), patch: $('patchCanvas'),
+    refPreview: $('refPreview'), lastPreview: $('lastPreview'),
+    opencvBadge: $('opencvBadge'), cameraBadge: $('cameraBadge'), decision: $('decision'), reason: $('reason'),
+    scaleText: $('scaleText'), refText: $('refText'), autoStateText: $('autoStateText'),
+    mWidth: $('mWidth'), mHeight: $('mHeight'), mArea: $('mArea'), mAngle: $('mAngle'), mTextOffset: $('mTextOffset'), mTextDelta: $('mTextDelta'),
+    okCount: $('okCount'), badCount: $('badCount'), totalCount: $('totalCount'), okPct: $('okPct'), logBody: $('logBody'),
+    refDetails: $('refDetails'), lastDetails: $('lastDetails'), toast: $('toast')
   };
-}
-function loadConfig(){
-  const saved = Object.assign({}, DEFAULT_CONFIG, safeJSON(localStorage.getItem(STORAGE.config), {}));
-  Object.keys(saved).forEach(k => {
-    const el = $(k);
-    if (!el) return;
-    if (el.type === 'checkbox') el.checked = Boolean(saved[k]);
-    else el.value = saved[k];
-  });
-}
-function saveConfig(){
-  localStorage.setItem(STORAGE.config, JSON.stringify(cfg()));
-  toast('Configuración guardada');
-}
-function updateScaleText(){
-  $('scaleText').textContent = pxPerMm ? `Escala: ${pxPerMm.toFixed(3)} px/mm guardada. Si mueves el celular, recalibra.` : 'Escala: no calibrada.';
-}
-function updateMasterText(){
-  if (!master) {
-    $('masterText').textContent = 'Maestro: no guardado.';
-    return;
-  }
-  $('masterText').textContent = `Maestro: guardado ${master.createdAt || ''}. Visual y contorno activos.`;
-}
 
-function onOpenCvReady(){
-  opencvReady = true;
-  setBadge($('cvBadge'), 'OpenCV listo', 'ok');
-  setWork('Motor visual listo', 'Inicia cámara, calibra y mide una pieza patrón antes de activar automático.');
-}
-window.addEventListener('opencv-ready', onOpenCvReady);
-setTimeout(() => {
-  if (window.cvReady || (window.cv && cv.Mat)) onOpenCvReady();
-  else setBadge($('cvBadge'), 'OpenCV cargando...', 'warn');
-}, 1600);
-setTimeout(() => {
-  if (!opencvReady) {
-    setBadge($('cvBadge'), 'OpenCV no listo', 'bad');
-    setWork('Falta cargar OpenCV', 'Revisa internet. GitHub Pages sí permite cámara, pero esta app necesita descargar OpenCV.js.');
-  }
-}, 9000);
+  const ctx = els.overlay.getContext('2d');
+  const frameCtx = els.frame.getContext('2d', { willReadFrequently: true });
+  const refCtx = els.refPreview.getContext('2d');
+  const lastCtx = els.lastPreview.getContext('2d');
 
-async function startCamera(){
-  try {
-    if (!navigator.mediaDevices?.getUserMedia) throw new Error('getUserMedia no disponible');
-    if (stream) stopCamera();
-    const constraints = {
-      video: {
-        facingMode: { ideal: 'environment' },
-        width: { ideal: 1920 },
-        height: { ideal: 1080 }
-      },
-      audio: false
+  let stream = null;
+  let pxPerMm = Number(localStorage.getItem('patchInspectorV4.pxPerMm') || 0);
+  let reference = safeJson(localStorage.getItem('patchInspectorV4.reference'), null);
+  let inspectionLog = safeJson(localStorage.getItem('patchInspectorV4.log'), []);
+  let autoEnabled = false;
+  let autoState = 'idle'; // idle | candidate | locked
+  let stableFrames = 0;
+  let lastSignature = null;
+  let lastAutoProcess = 0;
+
+  function safeJson(raw, fallback) {
+    try { return raw ? JSON.parse(raw) : fallback; } catch { return fallback; }
+  }
+
+  function cfg() {
+    return {
+      lot: $('lotName').value.trim() || 'Sin lote',
+      squareMm: positiveNumber($('squareMm').value, 50),
+      tolSizePct: positiveNumber($('tolSizePct').value, 3),
+      tolAreaPct: positiveNumber($('tolAreaPct').value, 6),
+      tolTextRefMm: positiveNumber($('tolTextRefMm').value, 1.5),
+      tolTextAbsMm: positiveNumber($('tolTextAbsMm').value, 2.5),
+      tolAngle: positiveNumber($('tolAngle').value, 25),
+      textStartPct: clamp(positiveNumber($('textStartPct').value, 62), 40, 85),
+      textThreshold: clamp(positiveNumber($('textThreshold').value, 95), 20, 180),
+      patchThreshold: clamp(positiveNumber($('patchThreshold').value, 55), 10, 220),
+      minPatchAreaPct: clamp(positiveNumber($('minPatchAreaPct').value, 1), 0.1, 30)
     };
-    stream = await navigator.mediaDevices.getUserMedia(constraints);
-    video.srcObject = stream;
-    await video.play();
-    await waitForVideoSize();
-    resizeCanvases();
-    setBadge($('cameraBadge'), 'Cámara activa', 'ok');
-    setWork('Cámara activa', 'Coloca el parche completo. Si cambias altura del celular, recalibra escala.');
-    toast('Cámara iniciada');
-    requestAnimationFrame(loop);
-  } catch (err) {
-    console.error(err);
-    setBadge($('cameraBadge'), 'Error cámara', 'bad');
-    setWork('No se pudo abrir cámara', 'Abre desde GitHub Pages con HTTPS y concede permiso de cámara. En iPhone usa Safari.');
-    toast('No se pudo abrir cámara. Revisa permisos y HTTPS.', 2600);
   }
-}
-function stopCamera(){
-  if (stream) stream.getTracks().forEach(t => t.stop());
-  stream = null;
-}
-function waitForVideoSize(){
-  return new Promise(resolve => {
-    if (video.videoWidth && video.videoHeight) return resolve();
-    video.onloadedmetadata = () => resolve();
+
+  function positiveNumber(value, fallback) {
+    const n = Number(value);
+    return Number.isFinite(n) && n > 0 ? n : fallback;
+  }
+
+  function clamp(n, min, max) { return Math.max(min, Math.min(max, n)); }
+
+  function toast(message, ms = 2100) {
+    els.toast.textContent = message;
+    els.toast.classList.add('show');
+    clearTimeout(toast._t);
+    toast._t = setTimeout(() => els.toast.classList.remove('show'), ms);
+  }
+
+  function setBadge(el, text, cls) {
+    el.textContent = text;
+    el.className = `badge ${cls || 'idle'}`;
+  }
+
+  function setDecision(type, text, reason) {
+    els.decision.textContent = text;
+    els.decision.className = `decision ${type}`;
+    els.reason.textContent = reason || '';
+  }
+
+  function cvIsReady() { return window.cvReady && typeof cv !== 'undefined' && cv.Mat; }
+
+  window.addEventListener('opencv-ready', () => {
+    setBadge(els.opencvBadge, 'OpenCV listo', 'live');
+    toast('OpenCV cargado. Ya podemos medir sin rezarle al navegador.');
   });
-}
-function resizeCanvases(){
-  if (!video.videoWidth || !video.videoHeight) return;
-  overlay.width = video.videoWidth;
-  overlay.height = video.videoHeight;
-  capture.width = video.videoWidth;
-  capture.height = video.videoHeight;
-}
-window.addEventListener('resize', resizeCanvases);
-video.addEventListener('loadedmetadata', resizeCanvases);
 
-function grabFrame(){
-  if (!stream || !video.videoWidth) return false;
-  resizeCanvases();
-  capCtx.drawImage(video, 0, 0, capture.width, capture.height);
-  return true;
-}
-function ensureReady(){
-  if (!opencvReady || typeof cv === 'undefined' || !cv.Mat) {
-    toast('OpenCV todavía no está listo. Internet, ese empleado de medio tiempo.');
-    return false;
-  }
-  if (!grabFrame()) {
-    toast('Primero inicia la cámara.');
-    return false;
-  }
-  return true;
-}
+  if (cvIsReady()) setBadge(els.opencvBadge, 'OpenCV listo', 'live');
+  else setBadge(els.opencvBadge, 'Cargando OpenCV', 'warn');
 
-function analyzeFrame({ record=false, silent=false } = {}){
-  if (!ensureReady()) return null;
-  const conf = cfg();
-  let src = cv.imread(capture);
-  let gray = new cv.Mat();
-  let blur = new cv.Mat();
-  let best = null;
-  try {
-    cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
-    cv.GaussianBlur(gray, blur, new cv.Size(5,5), 0);
-    best = findBestContour(blur, src.cols, src.rows, conf);
-    if (!best) {
-      lastDetection = null;
-      clearOverlay();
-      if (!silent) setDecision(null, 'No detecto un contorno confiable. Usa fondo sólido mate, sin textura y con buen contraste.');
-      return null;
+  function resizeOverlay() {
+    const r = els.video.getBoundingClientRect();
+    const ratio = window.devicePixelRatio || 1;
+    els.overlay.width = Math.max(1, Math.round(r.width * ratio));
+    els.overlay.height = Math.max(1, Math.round(r.height * ratio));
+    ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+    clearOverlay();
+  }
+
+  window.addEventListener('resize', resizeOverlay);
+  window.addEventListener('orientationchange', () => setTimeout(resizeOverlay, 400));
+
+  async function startCamera() {
+    try {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        throw new Error('getUserMedia no disponible');
+      }
+      if (stream) stream.getTracks().forEach(t => t.stop());
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: { ideal: 'environment' },
+          width: { ideal: 1920 },
+          height: { ideal: 1080 }
+        },
+        audio: false
+      });
+      els.video.srcObject = stream;
+      await els.video.play();
+      setBadge(els.cameraBadge, 'Cámara activa', 'live');
+      resizeOverlay();
+      setWorkflow();
+      requestAnimationFrame(loop);
+      toast('Cámara iniciada. Fija el celular antes de calibrar.');
+    } catch (err) {
+      console.error(err);
+      setBadge(els.cameraBadge, 'Error cámara', 'bad');
+      toast('No pude abrir cámara. Revisa permisos y que estés en HTTPS/GitHub Pages.', 3200);
     }
-    const result = buildResult(best, src, conf);
-    lastDetection = result;
-    drawResult(result);
-    setDecision(result);
-    if (record) recordResult(result);
-    return result;
-  } catch (err) {
-    console.error(err);
-    toast('Error de medición. Revisa fondo, luz y que el parche esté completo.');
-    return null;
-  } finally {
-    src.delete(); gray.delete(); blur.delete();
-    if (best?.contour) best.contour.delete();
   }
-}
 
-function findBestContour(gray, width, height, conf){
-  const masks = [];
-  const bin1 = new cv.Mat();
-  const bin2 = new cv.Mat();
-  const edges = new cv.Mat();
-  const morphKernel = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(5,5));
-  const minArea = width * height * (conf.minAreaPct / 100);
-  const maxArea = width * height * 0.70;
-  try {
-    cv.threshold(gray, bin1, 0, 255, cv.THRESH_BINARY + cv.THRESH_OTSU);
-    cv.threshold(gray, bin2, 0, 255, cv.THRESH_BINARY_INV + cv.THRESH_OTSU);
-    cv.Canny(gray, edges, 45, 145);
-    for (const m of [bin1, bin2]) {
-      cv.morphologyEx(m, m, cv.MORPH_OPEN, morphKernel);
-      cv.morphologyEx(m, m, cv.MORPH_CLOSE, morphKernel);
-      masks.push(m);
-    }
-    masks.push(edges);
+  function grabFrame() {
+    const w = els.video.videoWidth;
+    const h = els.video.videoHeight;
+    if (!w || !h) return false;
+    els.frame.width = w;
+    els.frame.height = h;
+    frameCtx.drawImage(els.video, 0, 0, w, h);
+    return true;
+  }
 
-    let best = null;
-    for (const mask of masks) {
-      const contours = new cv.MatVector();
-      const hierarchy = new cv.Mat();
+  function clearOverlay() {
+    ctx.clearRect(0, 0, els.overlay.clientWidth, els.overlay.clientHeight);
+  }
+
+  function drawPolygon(points, color = '#ffd166', label = '') {
+    clearOverlay();
+    if (!points || !points.length) return;
+    const sx = els.overlay.clientWidth / els.frame.width;
+    const sy = els.overlay.clientHeight / els.frame.height;
+    ctx.save();
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = color;
+    ctx.fillStyle = color;
+    ctx.font = '700 16px system-ui';
+    ctx.beginPath();
+    points.forEach((p, i) => {
+      const x = p.x * sx;
+      const y = p.y * sy;
+      if (i) ctx.lineTo(x, y); else ctx.moveTo(x, y);
+    });
+    ctx.closePath();
+    ctx.stroke();
+    if (label) ctx.fillText(label, 18, 30);
+    ctx.restore();
+  }
+
+  function calibrateWithSquare() {
+    if (!cvIsReady()) return toast('OpenCV aún está cargando. Espera unos segundos.', 2600);
+    if (!grabFrame()) return toast('Primero inicia la cámara. Sí, la parte aburrida pero necesaria.');
+
+    let src = null, gray = null, blur = null, mask = null, contours = null, hierarchy = null;
+    try {
+      src = cv.imread(els.frame);
+      gray = new cv.Mat();
+      blur = new cv.Mat();
+      mask = new cv.Mat();
+      contours = new cv.MatVector();
+      hierarchy = new cv.Mat();
+
+      cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+      cv.GaussianBlur(gray, blur, new cv.Size(5, 5), 0);
+      cv.threshold(blur, mask, 85, 255, cv.THRESH_BINARY_INV);
+      const kernel = cv.Mat.ones(5, 5, cv.CV_8U);
+      cv.morphologyEx(mask, mask, cv.MORPH_CLOSE, kernel);
+      kernel.delete();
       cv.findContours(mask, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+
+      const frameArea = els.frame.width * els.frame.height;
+      let best = null;
+
       for (let i = 0; i < contours.size(); i++) {
         const c = contours.get(i);
         const area = cv.contourArea(c);
-        if (area < minArea || area > maxArea) { c.delete(); continue; }
-        const br = cv.boundingRect(c);
-        if (touchesBorder(br, width, height, 6)) { c.delete(); continue; }
+        if (area < frameArea * 0.002 || area > frameArea * 0.45) { c.delete(); continue; }
+        const peri = cv.arcLength(c, true);
+        const approx = new cv.Mat();
+        cv.approxPolyDP(c, approx, 0.035 * peri, true);
         const rect = cv.minAreaRect(c);
-        const rw = Math.max(rect.size.width, 1), rh = Math.max(rect.size.height, 1);
-        const longSide = Math.max(rw, rh), shortSide = Math.min(rw, rh);
-        if (longSide < 55 || shortSide < 35) { c.delete(); continue; }
-        const aspect = shortSide / longSide;
-        if (aspect < 0.35 || aspect > 1.0) { c.delete(); continue; }
-        const fill = area / Math.max(1, br.width * br.height);
-        if (fill < 0.12 || fill > 0.98) { c.delete(); continue; }
-        const centerScore = 1 - distanceFromCenter(rect.center, width, height);
-        const areaScore = area / (width * height);
-        const fillScore = 1 - Math.abs(fill - 0.55);
-        const score = areaScore * 10 + centerScore * 0.15 + fillScore * 0.12;
-        if (!best || score > best.score) {
-          if (best?.contour) best.contour.delete();
-          best = { contour: c, area, rect, br, score };
+        const rw = rect.size.width;
+        const rh = rect.size.height;
+        const ratio = rw > rh ? rw / Math.max(rh, 1) : rh / Math.max(rw, 1);
+        const rectArea = Math.max(rw * rh, 1);
+        const fill = area / rectArea;
+        const touches = rectTouchesEdge(rect, els.frame.width, els.frame.height, 10);
+        const isSquareish = ratio >= 0.78 && ratio <= 1.28;
+        const isSolid = fill > 0.55;
+        const isQuadish = approx.rows >= 4 && approx.rows <= 8;
+        if (isSquareish && isSolid && isQuadish && !touches) {
+          const score = area * (1 - Math.abs(1 - ratio)) * fill;
+          if (!best || score > best.score) {
+            if (best && best.contour) best.contour.delete();
+            best = { contour: c, rect, area, score };
+          } else {
+            c.delete();
+          }
         } else {
           c.delete();
         }
+        approx.delete();
       }
-      contours.delete(); hierarchy.delete();
-    }
-    return best;
-  } finally {
-    bin1.delete(); bin2.delete(); edges.delete(); morphKernel.delete();
-  }
-}
-function touchesBorder(br, w, h, margin){
-  return br.x <= margin || br.y <= margin || (br.x + br.width) >= (w - margin) || (br.y + br.height) >= (h - margin);
-}
-function distanceFromCenter(center, w, h){
-  const dx = (center.x - w/2) / (w/2);
-  const dy = (center.y - h/2) / (h/2);
-  return clamp(Math.hypot(dx, dy) / Math.SQRT2, 0, 1);
-}
 
-function buildResult(best, src, conf){
-  const norm = normalizeRect(best.rect, conf.targetW, conf.targetH);
-  const widthMm = pxPerMm ? norm.widthPx / pxPerMm : null;
-  const heightMm = pxPerMm ? norm.heightPx / pxPerMm : null;
-  const areaMm = pxPerMm ? best.area / (pxPerMm * pxPerMm) : null;
-  const points = cv.RotatedRect.points(best.rect).map(p => ({ x: p.x, y: p.y }));
-  const contourPts = contourToPoints(best.contour);
-  const signature = shapeSignature(contourPts, best.rect, norm, 96);
+      if (!best) {
+        setDecision('bad', 'NO CALIBRADO', 'No encontré un cuadro negro claro. Usa cuadro negro 5×5 cm con borde blanco y buena luz.');
+        return toast('No detecté el cuadro 5×5. Acércalo al centro y evita sombras.', 3200);
+      }
 
-  let visualScore = null;
-  let shapeScore = null;
-  const visual = buildVisualFingerprint(src, points, conf.targetW, conf.targetH);
-
-  if (master && conf.useMaster) {
-    if (master.visual && visual) visualScore = compareVisual(master.visual, visual);
-    if (master.signature && signature) shapeScore = compareSignature(master.signature, signature);
-  }
-
-  const reasons = [];
-  let pass = true;
-  if (!pxPerMm) { pass = false; reasons.push('falta calibrar escala'); }
-  if (pxPerMm) {
-    const dw = widthMm - conf.targetW;
-    const dh = heightMm - conf.targetH;
-    if (Math.abs(dw) > conf.tolW) { pass = false; reasons.push(`ancho fuera: ${signed(dw)} mm`); }
-    if (Math.abs(dh) > conf.tolH) { pass = false; reasons.push(`alto fuera: ${signed(dh)} mm`); }
-    if (Math.abs(norm.angle) > conf.tolAngle) { pass = false; reasons.push(`giro excesivo: ${norm.angle.toFixed(1)}°`); }
-  }
-  if (master && conf.useMaster) {
-    if (visualScore !== null && visualScore < conf.visualMin) { pass = false; reasons.push(`visual distinto: ${visualScore.toFixed(0)}%`); }
-    if (shapeScore !== null && shapeScore < conf.shapeMin) { pass = false; reasons.push(`contorno distinto: ${shapeScore.toFixed(0)}%`); }
-  }
-  if (best.br.width < 20 || best.br.height < 20) { pass = false; reasons.push('pieza demasiado pequeña en cuadro'); }
-
-  return {
-    pass,
-    reason: reasons.join('; ') || 'dentro de tolerancia',
-    widthMm,
-    heightMm,
-    areaMm,
-    angle: norm.angle,
-    box: points,
-    center: { x: best.rect.center.x, y: best.rect.center.y },
-    areaPx: best.area,
-    signature,
-    visual,
-    visualScore,
-    shapeScore,
-    timestamp: new Date()
-  };
-}
-
-function normalizeRect(rect, targetW, targetH){
-  let rw = rect.size.width;
-  let rh = rect.size.height;
-  let angle = rect.angle;
-  const targetRatio = targetW / targetH;
-  const ratioA = rw / rh;
-  const ratioB = rh / rw;
-  const scoreA = Math.abs(Math.log(Math.max(ratioA, 0.001) / targetRatio));
-  const scoreB = Math.abs(Math.log(Math.max(ratioB, 0.001) / targetRatio));
-  let widthPx, heightPx;
-  if (scoreA <= scoreB) {
-    widthPx = rw;
-    heightPx = rh;
-  } else {
-    widthPx = rh;
-    heightPx = rw;
-    angle += 90;
-  }
-  while (angle > 45) angle -= 90;
-  while (angle < -45) angle += 90;
-  return { widthPx: Math.abs(widthPx), heightPx: Math.abs(heightPx), angle };
-}
-function signed(n){ return `${n >= 0 ? '+' : ''}${n.toFixed(1)}`; }
-function contourToPoints(contour){
-  const pts = [];
-  const data = contour.data32S;
-  for (let i = 0; i < data.length; i += 2) pts.push({ x: data[i], y: data[i+1] });
-  return pts;
-}
-function shapeSignature(points, rect, norm, bins=96){
-  if (!points || points.length < 10) return null;
-  const sig = new Array(bins).fill(0);
-  const angle = -norm.angle * Math.PI / 180;
-  const ca = Math.cos(angle), sa = Math.sin(angle);
-  const sx = Math.max(norm.widthPx / 2, 1);
-  const sy = Math.max(norm.heightPx / 2, 1);
-  for (const p of points) {
-    const dx = p.x - rect.center.x;
-    const dy = p.y - rect.center.y;
-    const x = (dx * ca - dy * sa) / sx;
-    const y = (dx * sa + dy * ca) / sy;
-    const theta = Math.atan2(y, x);
-    const r = Math.hypot(x, y);
-    const idx = Math.round(((theta + Math.PI) / (2 * Math.PI)) * bins) % bins;
-    sig[idx] = Math.max(sig[idx], r);
-  }
-  // Rellena huecos de bins sin punto. Es tosco, pero evita que un contorno simplificado arruine la comparación.
-  for (let pass = 0; pass < 2; pass++) {
-    for (let i = 0; i < bins; i++) {
-      if (sig[i] === 0) sig[i] = (sig[(i - 1 + bins) % bins] + sig[(i + 1) % bins]) / 2;
+      const pts = cv.RotatedRect.points(best.rect).map(p => ({ x: p.x, y: p.y }));
+      const avgPx = (best.rect.size.width + best.rect.size.height) / 2;
+      const squareMm = cfg().squareMm;
+      pxPerMm = avgPx / squareMm;
+      localStorage.setItem('patchInspectorV4.pxPerMm', String(pxPerMm));
+      const angle = normalizeAngle(best.rect.angle, best.rect.size.width, best.rect.size.height);
+      drawPolygon(pts, '#ffd166', 'CUADRO 5×5 DETECTADO');
+      setDecision('ok', 'CALIBRADO', `Escala guardada: ${pxPerMm.toFixed(3)} px/mm. Retira el cuadro sin mover el celular.`);
+      toast(`Calibrado: ${pxPerMm.toFixed(3)} px/mm. Ahora retira el cuadro.`, 3400);
+      best.contour.delete();
+      updateStatus();
+      setWorkflow();
+    } catch (err) {
+      console.error(err);
+      toast('Error calibrando. El navegador eligió drama, pero revisa contraste y luz.', 3300);
+    } finally {
+      deleteAll(src, gray, blur, mask, contours, hierarchy);
     }
   }
-  const max = Math.max(...sig, 1);
-  return sig.map(v => Number((v / max).toFixed(4)));
-}
-function compareSignature(a, b){
-  if (!a || !b || a.length !== b.length) return null;
-  const n = a.length;
-  let best = Infinity;
-  for (let shift = 0; shift < n; shift++) {
-    let sum = 0;
-    for (let i = 0; i < n; i++) {
-      const d = a[i] - b[(i + shift) % n];
-      sum += d*d;
+
+  function rectTouchesEdge(rect, width, height, margin) {
+    const pts = cv.RotatedRect.points(rect);
+    return pts.some(p => p.x < margin || p.y < margin || p.x > width - margin || p.y > height - margin);
+  }
+
+  function takeReference() {
+    const res = measureCurrent(false, { requireReference: false, previewOnly: false });
+    if (!res || !res.patch) return;
+    if (!pxPerMm) return toast('Primero calibra con el cuadro 5×5 cm. Luego tomamos referencia.');
+    if (!res.text.found) return toast('No detecté texto en la pieza referencia. Ajusta zona texto o luz.', 3200);
+
+    reference = {
+      createdAt: new Date().toISOString(),
+      widthMm: res.widthMm,
+      heightMm: res.heightMm,
+      areaMm: res.areaMm,
+      textOffsetMm: res.text.offsetMm,
+      textWidthMm: res.text.widthMm,
+      angleDeg: res.angleDeg,
+      thumb: canvasToDataUrl(els.patch)
+    };
+    localStorage.setItem('patchInspectorV4.reference', JSON.stringify(reference));
+    drawCanvasImage(els.refPreview, reference.thumb);
+    const warn = Math.abs(reference.textOffsetMm) > cfg().tolTextAbsMm ? ' Ojo: el texto de tu referencia ya viene algo descentrado.' : '';
+    setDecision('ok', 'REFERENCIA GUARDADA', `Referencia: ${fmt(reference.widthMm)} × ${fmt(reference.heightMm)} mm. Texto offset: ${fmt(reference.textOffsetMm)} mm.${warn}`);
+    toast('Referencia aprobada guardada. Ahora sí, a auditar sin medir como monje copista.', 3600);
+    updateStatus();
+    setWorkflow();
+  }
+
+  function measureNow() {
+    const res = measureCurrent(true, { requireReference: true, previewOnly: false });
+    if (res) addLog(res);
+  }
+
+  function measureCurrent(draw = true, options = {}) {
+    if (!cvIsReady()) { toast('OpenCV aún está cargando. Espera unos segundos.'); return null; }
+    if (!grabFrame()) { toast('Primero inicia la cámara.'); return null; }
+    if (!pxPerMm) {
+      setDecision('bad', 'FALTA CALIBRAR', 'Coloca el cuadro 5×5 cm, calibra y retíralo sin mover el celular.');
+      return null;
     }
-    best = Math.min(best, Math.sqrt(sum / n));
-  }
-  return clamp(100 * (1 - best / 0.18), 0, 100);
-}
+    if (options.requireReference && !reference) {
+      setDecision('bad', 'FALTA REFERENCIA', 'Coloca un parche bueno y presiona “Tomar referencia aprobada”.');
+      return null;
+    }
 
-function orderBox(pts){
-  const tl = pts.reduce((a,p)=> (p.x+p.y < a.x+a.y ? p : a), pts[0]);
-  const br = pts.reduce((a,p)=> (p.x+p.y > a.x+a.y ? p : a), pts[0]);
-  const tr = pts.reduce((a,p)=> (p.x-p.y > a.x-a.y ? p : a), pts[0]);
-  const bl = pts.reduce((a,p)=> (p.x-p.y < a.x-a.y ? p : a), pts[0]);
-  return [tl,tr,br,bl];
-}
-function buildVisualFingerprint(src, box, targetW, targetH){
-  const ordered = orderBox(box);
-  const outW = 72;
-  const outH = Math.max(72, Math.round(outW * targetH / targetW));
-  let srcTri = null, dstTri = null, M = null, warped = null, gray = null, small = null, eq = null;
-  try {
-    srcTri = cv.matFromArray(4, 1, cv.CV_32FC2, [
-      ordered[0].x, ordered[0].y,
-      ordered[1].x, ordered[1].y,
-      ordered[2].x, ordered[2].y,
-      ordered[3].x, ordered[3].y
-    ]);
-    dstTri = cv.matFromArray(4, 1, cv.CV_32FC2, [0,0, outW,0, outW,outH, 0,outH]);
-    M = cv.getPerspectiveTransform(srcTri, dstTri);
-    warped = new cv.Mat();
-    cv.warpPerspective(src, warped, M, new cv.Size(outW, outH), cv.INTER_LINEAR, cv.BORDER_CONSTANT, new cv.Scalar(0,0,0,255));
-    gray = new cv.Mat();
-    cv.cvtColor(warped, gray, cv.COLOR_RGBA2GRAY);
-    small = new cv.Mat();
-    cv.resize(gray, small, new cv.Size(32, 32), 0, 0, cv.INTER_AREA);
-    eq = new cv.Mat();
-    cv.equalizeHist(small, eq);
-    return Array.from(eq.data).map(v => Math.round(v));
-  } catch (err) {
-    console.warn('No se pudo generar huella visual', err);
-    return null;
-  } finally {
-    [srcTri, dstTri, M, warped, gray, small, eq].forEach(m => { if (m) m.delete(); });
-  }
-}
-function compareVisual(a, b){
-  if (!a || !b || a.length !== b.length) return null;
-  const n = a.length;
-  let ma = 0, mb = 0;
-  for (let i = 0; i < n; i++) { ma += a[i]; mb += b[i]; }
-  ma /= n; mb /= n;
-  let dot = 0, va = 0, vb = 0;
-  for (let i = 0; i < n; i++) {
-    const da = a[i] - ma;
-    const db = b[i] - mb;
-    dot += da * db;
-    va += da * da;
-    vb += db * db;
-  }
-  if (va === 0 || vb === 0) return 0;
-  const corr = dot / Math.sqrt(va * vb);
-  return clamp(((corr + 1) / 2) * 100, 0, 100);
-}
+    const detected = detectPatchAndAnalyze();
+    if (!detected) {
+      if (!options.previewOnly) setDecision('neutral', 'ESPERANDO', 'No encuentro parche claro. Usa fondo oscuro mate y coloca la pieza completa.');
+      return null;
+    }
 
-function drawResult(res){
-  clearOverlay();
-  if (!res?.box) return;
-  ctx.save();
-  ctx.lineWidth = Math.max(4, overlay.width / 320);
-  ctx.strokeStyle = res.pass ? '#20d48c' : '#ff5266';
-  ctx.fillStyle = ctx.strokeStyle;
-  ctx.beginPath();
-  res.box.forEach((p, i) => i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y));
-  ctx.closePath();
-  ctx.stroke();
-  ctx.font = `${Math.max(22, overlay.width / 45)}px system-ui`;
-  ctx.fillText(res.pass ? 'APROBADO' : 'RECHAZADO', 22, 42);
-  ctx.restore();
-}
-function clearOverlay(){
-  ctx.clearRect(0,0,overlay.width,overlay.height);
-}
-function setDecision(res, msg){
-  if (!res) {
-    $('decision').textContent = 'ESPERANDO';
-    $('decision').className = 'decision neutral';
-    $('reason').textContent = msg || 'Esperando parche.';
-    $('mWidth').textContent = '--';
-    $('mHeight').textContent = '--';
-    $('mAngle').textContent = '--';
-    $('mArea').textContent = '--';
-    $('mVisual').textContent = '--';
-    $('mShape').textContent = '--';
-    return;
+    const result = buildDecision(detected);
+    if (draw) drawPolygon(detected.box, result.pass ? '#1fd18a' : '#ff4d5e', result.pass ? 'APROBADO' : 'RECHAZADO');
+    updateMeasurementUI(result);
+    renderLastPreview(result);
+    return result;
   }
-  $('decision').textContent = res.pass ? 'APROBADO' : 'RECHAZADO';
-  $('decision').className = `decision ${res.pass ? 'ok' : 'bad'}`;
-  $('reason').textContent = res.reason;
-  $('mWidth').textContent = res.widthMm ? `${res.widthMm.toFixed(1)} mm` : '--';
-  $('mHeight').textContent = res.heightMm ? `${res.heightMm.toFixed(1)} mm` : '--';
-  $('mAngle').textContent = `${res.angle.toFixed(1)}°`;
-  $('mArea').textContent = res.areaMm ? `${res.areaMm.toFixed(0)} mm²` : '--';
-  $('mVisual').textContent = res.visualScore === null ? '--' : `${res.visualScore.toFixed(0)}%`;
-  $('mShape').textContent = res.shapeScore === null ? '--' : `${res.shapeScore.toFixed(0)}%`;
-}
 
-function recordResult(res){
-  const conf = cfg();
-  const row = {
-    time: new Date().toLocaleString(),
-    iso: new Date().toISOString(),
-    lot: conf.lotName,
-    result: res.pass ? 'APROBADO' : 'RECHAZADO',
-    width: res.widthMm ? res.widthMm.toFixed(1) : '',
-    height: res.heightMm ? res.heightMm.toFixed(1) : '',
-    angle: res.angle.toFixed(1),
-    area: res.areaMm ? res.areaMm.toFixed(0) : '',
-    visual: res.visualScore === null ? '' : res.visualScore.toFixed(0),
-    shape: res.shapeScore === null ? '' : res.shapeScore.toFixed(0),
-    reason: res.reason
-  };
-  log.unshift(row);
-  log = log.slice(0, 800);
-  localStorage.setItem(STORAGE.log, JSON.stringify(log));
-  renderLog();
-  lastRecordedSignature = res.signature;
-  if (navigator.vibrate) navigator.vibrate(res.pass ? 35 : [80,40,80]);
-}
-function renderLog(){
-  const body = $('logBody');
-  body.innerHTML = log.map(r => `
-    <tr>
-      <td>${escapeHtml(r.time)}</td>
-      <td>${escapeHtml(r.lot)}</td>
-      <td class="${r.result === 'APROBADO' ? 'ok' : 'bad'}">${escapeHtml(r.result)}</td>
-      <td>${escapeHtml(r.width)}</td>
-      <td>${escapeHtml(r.height)}</td>
-      <td>${escapeHtml(r.angle)}</td>
-      <td>${escapeHtml(r.visual || '')}</td>
-      <td>${escapeHtml(r.shape || '')}</td>
-      <td>${escapeHtml(r.reason)}</td>
-    </tr>`).join('');
-  const ok = log.filter(r => r.result === 'APROBADO').length;
-  const bad = log.length - ok;
-  $('okCount').textContent = ok;
-  $('badCount').textContent = bad;
-  $('totalCount').textContent = log.length;
-  $('okPct').textContent = log.length ? `${((ok/log.length)*100).toFixed(1)}%` : '--';
-}
-function escapeHtml(s){
-  return String(s ?? '').replace(/[&<>'"]/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[ch]));
-}
+  function detectPatchAndAnalyze() {
+    let src = null, gray = null, blur = null, mask = null, contours = null, hierarchy = null;
+    try {
+      src = cv.imread(els.frame);
+      gray = new cv.Mat();
+      blur = new cv.Mat();
+      mask = new cv.Mat();
+      contours = new cv.MatVector();
+      hierarchy = new cv.Mat();
+      const c = cfg();
+      cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+      cv.GaussianBlur(gray, blur, new cv.Size(5, 5), 0);
+      cv.threshold(blur, mask, c.patchThreshold, 255, cv.THRESH_BINARY);
+      const k1 = cv.Mat.ones(5, 5, cv.CV_8U);
+      cv.morphologyEx(mask, mask, cv.MORPH_CLOSE, k1);
+      cv.morphologyEx(mask, mask, cv.MORPH_OPEN, k1);
+      k1.delete();
+      cv.findContours(mask, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
 
-function resultStable(results){
-  if (results.length < 3) return false;
-  const last = results.slice(-3);
-  if (last.some(r => !r.widthMm || !r.heightMm)) return false;
-  const maxW = Math.max(...last.map(r => r.widthMm));
-  const minW = Math.min(...last.map(r => r.widthMm));
-  const maxH = Math.max(...last.map(r => r.heightMm));
-  const minH = Math.min(...last.map(r => r.heightMm));
-  const maxCx = Math.max(...last.map(r => r.center.x));
-  const minCx = Math.min(...last.map(r => r.center.x));
-  const maxCy = Math.max(...last.map(r => r.center.y));
-  const minCy = Math.min(...last.map(r => r.center.y));
-  return (maxW-minW) < 0.9 && (maxH-minH) < 0.9 && (maxCx-minCx) < 18 && (maxCy-minCy) < 18;
-}
-function loop(ts){
-  if (!stream) return;
-  const conf = cfg();
-  if (autoMode && opencvReady && ts - lastAutoTs > conf.autoDelay) {
-    lastAutoTs = ts;
-    const res = analyzeFrame({ record:false, silent:true });
-    if (autoState === 'WAITING') {
-      if (res && pxPerMm) {
-        missingFrames = 0;
-        stableResults.push(res);
-        stableResults = stableResults.slice(-5);
-        setWork('Auto: detectando pieza', 'Mantén la pieza quieta una fracción de segundo. El sistema registra una sola vez.');
-        if (resultStable(stableResults)) {
-          const finalRes = stableResults[stableResults.length - 1];
-          recordResult(finalRes);
-          setDecision(finalRes);
-          drawResult(finalRes);
-          autoState = 'COUNTED';
-          stableResults = [];
-          setWork(finalRes.pass ? 'Auto: pieza aprobada' : 'Auto: pieza rechazada', 'Retira la pieza para habilitar la siguiente medición.');
+      const frameArea = els.frame.width * els.frame.height;
+      const minArea = frameArea * (c.minPatchAreaPct / 100);
+      let best = null;
+
+      for (let i = 0; i < contours.size(); i++) {
+        const contour = contours.get(i);
+        const area = cv.contourArea(contour);
+        if (area < minArea || area > frameArea * 0.80) { contour.delete(); continue; }
+        const rect = cv.minAreaRect(contour);
+        if (rectTouchesEdge(rect, els.frame.width, els.frame.height, 4)) { contour.delete(); continue; }
+        const rectArea = Math.max(rect.size.width * rect.size.height, 1);
+        const fill = area / rectArea;
+        const score = area * clamp(fill, 0.25, 1.0);
+        if (!best || score > best.score) {
+          if (best && best.contour) best.contour.delete();
+          best = { contour, rect, area, score };
+        } else {
+          contour.delete();
         }
-      } else {
-        stableResults = [];
-        setWork('Auto: esperando pieza', 'Coloca el parche completo dentro del campo visual.');
       }
-    } else if (autoState === 'COUNTED') {
-      if (!res) missingFrames++;
-      else missingFrames = 0;
-      if (missingFrames >= 2) {
-        autoState = 'WAITING';
-        missingFrames = 0;
-        stableResults = [];
-        setDecision(null, 'Pieza retirada. Esperando la siguiente.');
-        setWork('Auto: listo para siguiente', 'Coloca otra pieza. No contará duplicados mientras no retires la anterior.');
-      } else {
-        setWork('Auto: pieza ya registrada', 'Retira la pieza. Sí, hay que quitarla; la cámara todavía no tiene brazos.');
+
+      if (!best) return null;
+
+      const warped = warpPatch(src, best.rect);
+      if (!warped || !warped.mat) {
+        best.contour.delete();
+        return null;
+      }
+
+      const text = analyzeText(warped.mat, c);
+      const angleDeg = normalizeAngle(best.rect.angle, best.rect.size.width, best.rect.size.height);
+      const box = cv.RotatedRect.points(best.rect).map(p => ({ x: p.x, y: p.y }));
+      const widthMm = warped.width / pxPerMm;
+      const heightMm = warped.height / pxPerMm;
+      const areaMm = best.area / (pxPerMm * pxPerMm);
+
+      cv.imshow(els.patch, warped.mat);
+
+      const result = {
+        patch: true,
+        widthMm,
+        heightMm,
+        areaMm,
+        angleDeg,
+        box,
+        text,
+        cropW: warped.width,
+        cropH: warped.height,
+        timestamp: new Date()
+      };
+
+      best.contour.delete();
+      warped.mat.delete();
+      return result;
+    } catch (err) {
+      console.error(err);
+      return null;
+    } finally {
+      deleteAll(src, gray, blur, mask, contours, hierarchy);
+    }
+  }
+
+  function warpPatch(src, rect) {
+    const points = cv.RotatedRect.points(rect).map(p => ({ x: p.x, y: p.y }));
+    const ordered = orderPoints(points);
+    const widthA = distance(ordered.br, ordered.bl);
+    const widthB = distance(ordered.tr, ordered.tl);
+    const heightA = distance(ordered.tr, ordered.br);
+    const heightB = distance(ordered.tl, ordered.bl);
+    let maxWidth = Math.max(20, Math.round(Math.max(widthA, widthB)));
+    let maxHeight = Math.max(20, Math.round(Math.max(heightA, heightB)));
+
+    // Si la pieza quedó casi vertical, conserva orientación de imagen. Si quedó girada fuerte, el orden de puntos la endereza.
+    const srcTri = cv.matFromArray(4, 1, cv.CV_32FC2, [
+      ordered.tl.x, ordered.tl.y,
+      ordered.tr.x, ordered.tr.y,
+      ordered.br.x, ordered.br.y,
+      ordered.bl.x, ordered.bl.y
+    ]);
+    const dstTri = cv.matFromArray(4, 1, cv.CV_32FC2, [
+      0, 0,
+      maxWidth - 1, 0,
+      maxWidth - 1, maxHeight - 1,
+      0, maxHeight - 1
+    ]);
+    const M = cv.getPerspectiveTransform(srcTri, dstTri);
+    const dst = new cv.Mat();
+    cv.warpPerspective(src, dst, M, new cv.Size(maxWidth, maxHeight), cv.INTER_LINEAR, cv.BORDER_CONSTANT, new cv.Scalar());
+    srcTri.delete(); dstTri.delete(); M.delete();
+    return { mat: dst, width: maxWidth, height: maxHeight };
+  }
+
+  function orderPoints(pts) {
+    const sortedByY = [...pts].sort((a, b) => a.y - b.y);
+    const top = sortedByY.slice(0, 2).sort((a, b) => a.x - b.x);
+    const bottom = sortedByY.slice(2).sort((a, b) => a.x - b.x);
+    return { tl: top[0], tr: top[1], bl: bottom[0], br: bottom[1] };
+  }
+
+  function distance(a, b) { return Math.hypot(a.x - b.x, a.y - b.y); }
+
+  function normalizeAngle(angle, w, h) {
+    let a = angle;
+    if (w < h) a += 90;
+    if (a > 45) a -= 90;
+    if (a < -45) a += 90;
+    return a;
+  }
+
+  function analyzeText(crop, c) {
+    let gray = null, roi = null, mask = null, contours = null, hierarchy = null;
+    try {
+      gray = new cv.Mat();
+      cv.cvtColor(crop, gray, cv.COLOR_RGBA2GRAY);
+      const startY = Math.round(crop.rows * (c.textStartPct / 100));
+      const h = Math.max(8, crop.rows - startY);
+      const rect = new cv.Rect(0, startY, crop.cols, h);
+      roi = gray.roi(rect);
+      mask = new cv.Mat();
+      cv.threshold(roi, mask, c.textThreshold, 255, cv.THRESH_BINARY_INV);
+      const kernel = cv.Mat.ones(3, 3, cv.CV_8U);
+      cv.morphologyEx(mask, mask, cv.MORPH_CLOSE, kernel);
+      kernel.delete();
+      contours = new cv.MatVector();
+      hierarchy = new cv.Mat();
+      cv.findContours(mask, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity, totalArea = 0;
+      for (let i = 0; i < contours.size(); i++) {
+        const cc = contours.get(i);
+        const area = cv.contourArea(cc);
+        if (area < 5) { cc.delete(); continue; }
+        const b = cv.boundingRect(cc);
+        // Evita tomar sombras del borde inferior como texto completo.
+        if (b.width > crop.cols * 0.95 && b.height < 5) { cc.delete(); continue; }
+        minX = Math.min(minX, b.x);
+        minY = Math.min(minY, b.y + startY);
+        maxX = Math.max(maxX, b.x + b.width);
+        maxY = Math.max(maxY, b.y + b.height + startY);
+        totalArea += area;
+        cc.delete();
+      }
+
+      if (!Number.isFinite(minX) || totalArea < 20) {
+        return { found: false, offsetMm: null, widthMm: null, bbox: null, reason: 'No detecté texto oscuro en la franja inferior.' };
+      }
+      const textCenterX = (minX + maxX) / 2;
+      const patchCenterX = crop.cols / 2;
+      const offsetPx = textCenterX - patchCenterX;
+      const offsetMm = offsetPx / pxPerMm;
+      const widthMm = (maxX - minX) / pxPerMm;
+      return {
+        found: true,
+        offsetMm,
+        widthMm,
+        bbox: { x: minX, y: minY, w: maxX - minX, h: maxY - minY },
+        areaPx: totalArea
+      };
+    } finally {
+      deleteAll(gray, roi, mask, contours, hierarchy);
+    }
+  }
+
+  function buildDecision(res) {
+    const c = cfg();
+    let pass = true;
+    const reasons = [];
+    let dwPct = null, dhPct = null, daPct = null, textDeltaMm = null;
+
+    if (!reference) {
+      pass = false;
+      reasons.push('Falta tomar referencia aprobada');
+    } else {
+      dwPct = pctDiff(res.widthMm, reference.widthMm);
+      dhPct = pctDiff(res.heightMm, reference.heightMm);
+      daPct = pctDiff(res.areaMm, reference.areaMm);
+      if (Math.abs(dwPct) > c.tolSizePct) { pass = false; reasons.push(`Ancho ${signed(dwPct)}% vs referencia`); }
+      if (Math.abs(dhPct) > c.tolSizePct) { pass = false; reasons.push(`Alto ${signed(dhPct)}% vs referencia`); }
+      if (Math.abs(daPct) > c.tolAreaPct) { pass = false; reasons.push(`Área ${signed(daPct)}% vs referencia`); }
+    }
+
+    if (Math.abs(res.angleDeg) > c.tolAngle) {
+      pass = false;
+      reasons.push(`Giro excesivo: ${fmt(res.angleDeg)}°`);
+    }
+
+    if (!res.text.found) {
+      pass = false;
+      reasons.push('No detecté texto');
+    } else {
+      if (reference && Number.isFinite(reference.textOffsetMm)) {
+        textDeltaMm = res.text.offsetMm - reference.textOffsetMm;
+        if (Math.abs(textDeltaMm) > c.tolTextRefMm) {
+          pass = false;
+          reasons.push(`Texto movido ${fmt(textDeltaMm)} mm contra referencia`);
+        }
+      }
+      if (Math.abs(res.text.offsetMm) > c.tolTextAbsMm) {
+        pass = false;
+        reasons.push(`Texto descentrado ${fmt(res.text.offsetMm)} mm del centro`);
+      }
+    }
+
+    const out = {
+      ...res,
+      pass,
+      reason: reasons.length ? reasons.join('; ') : 'Dentro de tolerancia',
+      dwPct,
+      dhPct,
+      daPct,
+      textDeltaMm
+    };
+    return out;
+  }
+
+  function pctDiff(value, ref) { return ((value - ref) / ref) * 100; }
+  function signed(n) { return `${n >= 0 ? '+' : ''}${n.toFixed(1)}`; }
+  function fmt(n) { return Number.isFinite(n) ? Number(n).toFixed(1) : '--'; }
+
+  function updateMeasurementUI(res) {
+    setDecision(res.pass ? 'ok' : 'bad', res.pass ? 'APROBADO' : 'RECHAZADO', res.reason);
+    els.mWidth.textContent = `${fmt(res.widthMm)} mm`;
+    els.mHeight.textContent = `${fmt(res.heightMm)} mm`;
+    els.mArea.textContent = `${fmt(res.areaMm)} mm²`;
+    els.mAngle.textContent = `${fmt(res.angleDeg)}°`;
+    els.mTextOffset.textContent = res.text.found ? `${fmt(res.text.offsetMm)} mm` : '--';
+    els.mTextDelta.textContent = Number.isFinite(res.textDeltaMm) ? `${fmt(res.textDeltaMm)} mm` : '--';
+  }
+
+  function addLog(res) {
+    const c = cfg();
+    const row = {
+      time: new Date().toLocaleString(),
+      lot: c.lot,
+      result: res.pass ? 'APROBADO' : 'RECHAZADO',
+      width: fmt(res.widthMm),
+      height: fmt(res.heightMm),
+      area: fmt(res.areaMm),
+      angle: fmt(res.angleDeg),
+      textOffset: res.text.found ? fmt(res.text.offsetMm) : '',
+      textDelta: Number.isFinite(res.textDeltaMm) ? fmt(res.textDeltaMm) : '',
+      reason: res.reason
+    };
+    inspectionLog.unshift(row);
+    inspectionLog = inspectionLog.slice(0, 1000);
+    localStorage.setItem('patchInspectorV4.log', JSON.stringify(inspectionLog));
+    renderLog();
+  }
+
+  function renderLog() {
+    els.logBody.innerHTML = inspectionLog.map(r => `
+      <tr>
+        <td>${escapeHtml(r.time)}</td><td>${escapeHtml(r.lot)}</td><td>${escapeHtml(r.result)}</td>
+        <td>${escapeHtml(r.width)}</td><td>${escapeHtml(r.height)}</td><td>${escapeHtml(r.area)}</td>
+        <td>${escapeHtml(r.textOffset)}</td><td>${escapeHtml(r.textDelta)}</td><td>${escapeHtml(r.reason)}</td>
+      </tr>`).join('');
+    const total = inspectionLog.length;
+    const ok = inspectionLog.filter(r => r.result === 'APROBADO').length;
+    const bad = total - ok;
+    els.okCount.textContent = ok;
+    els.badCount.textContent = bad;
+    els.totalCount.textContent = total;
+    els.okPct.textContent = total ? `${((ok / total) * 100).toFixed(1)}%` : '--';
+  }
+
+  function escapeHtml(s) {
+    return String(s ?? '').replace(/[&<>'"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#039;', '"': '&quot;' }[ch]));
+  }
+
+  function loop(ts) {
+    if (!stream) return;
+    if (autoEnabled && ts - lastAutoProcess > 450) {
+      lastAutoProcess = ts;
+      processAuto();
+    }
+    requestAnimationFrame(loop);
+  }
+
+  function processAuto() {
+    const res = measureCurrent(false, { requireReference: true, previewOnly: true });
+    if (!res) {
+      if (autoState !== 'idle') toast('Listo para siguiente pieza.', 1200);
+      autoState = 'idle';
+      stableFrames = 0;
+      lastSignature = null;
+      els.autoStateText.textContent = 'Esperando pieza';
+      clearOverlay();
+      return;
+    }
+
+    drawPolygon(res.box, res.pass ? '#1fd18a' : '#ff4d5e', autoState === 'locked' ? 'RETIRA PIEZA' : 'MIDIENDO');
+    const sig = signature(res);
+
+    if (autoState === 'idle') {
+      autoState = 'candidate';
+      stableFrames = 1;
+      lastSignature = sig;
+      els.autoStateText.textContent = 'Estabilizando pieza';
+      return;
+    }
+
+    if (autoState === 'candidate') {
+      if (isSimilarSignature(sig, lastSignature)) stableFrames += 1;
+      else stableFrames = 1;
+      lastSignature = sig;
+      els.autoStateText.textContent = `Estabilizando ${stableFrames}/2`;
+      if (stableFrames >= 2) {
+        addLog(res);
+        autoState = 'locked';
+        els.autoStateText.textContent = 'Registrado, retira pieza';
+        toast(res.pass ? 'Pieza aprobada registrada.' : 'Pieza rechazada registrada.', 1400);
+      }
+      return;
+    }
+
+    if (autoState === 'locked') {
+      els.autoStateText.textContent = 'Registrado, retira pieza';
+    }
+  }
+
+  function signature(res) {
+    const center = averagePoint(res.box);
+    return {
+      x: center.x,
+      y: center.y,
+      w: res.widthMm,
+      h: res.heightMm,
+      a: res.areaMm
+    };
+  }
+
+  function averagePoint(points) {
+    return points.reduce((acc, p) => ({ x: acc.x + p.x / points.length, y: acc.y + p.y / points.length }), { x: 0, y: 0 });
+  }
+
+  function isSimilarSignature(a, b) {
+    if (!a || !b) return false;
+    const dx = Math.abs(a.x - b.x);
+    const dy = Math.abs(a.y - b.y);
+    const dw = Math.abs(a.w - b.w);
+    const dh = Math.abs(a.h - b.h);
+    return dx < 18 && dy < 18 && dw < 1.5 && dh < 1.5;
+  }
+
+  function toggleAuto() {
+    if (!pxPerMm) return toast('Primero calibra con el cuadro 5×5 cm.');
+    if (!reference) return toast('Primero toma una referencia aprobada.');
+    autoEnabled = !autoEnabled;
+    autoState = 'idle';
+    stableFrames = 0;
+    lastSignature = null;
+    $('btnAuto').dataset.active = String(autoEnabled);
+    $('btnAuto').textContent = `Auto: ${autoEnabled ? 'ON' : 'OFF'}`;
+    els.autoStateText.textContent = autoEnabled ? 'Esperando pieza' : 'Inactivo';
+    toast(autoEnabled ? 'Auto activo. Registrará una vez y esperará que retires la pieza.' : 'Auto apagado.');
+    setWorkflow();
+  }
+
+  function exportCSV() {
+    const header = ['Hora','Lote','Resultado','Ancho mm','Alto mm','Area mm2','Giro grados','Texto offset mm','Texto delta mm','Motivo'];
+    const rows = inspectionLog.map(r => [r.time, r.lot, r.result, r.width, r.height, r.area, r.angle, r.textOffset, r.textDelta, r.reason]);
+    const csv = [header, ...rows].map(row => row.map(csvCell).join(',')).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `historial_inspector_parches_${new Date().toISOString().slice(0,10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  }
+
+  function csvCell(value) {
+    const s = String(value ?? '');
+    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  }
+
+  function clearCalibration() {
+    pxPerMm = 0;
+    localStorage.removeItem('patchInspectorV4.pxPerMm');
+    updateStatus();
+    setWorkflow();
+    toast('Calibración borrada. Vuelve a medir el cuadro 5×5.');
+  }
+
+  function clearReference() {
+    reference = null;
+    localStorage.removeItem('patchInspectorV4.reference');
+    clearPreview(els.refPreview, refCtx);
+    els.refDetails.textContent = 'Sin referencia.';
+    updateStatus();
+    setWorkflow();
+    toast('Referencia borrada. Toma una pieza aprobada nueva.');
+  }
+
+  function resetLog() {
+    if (!confirm('¿Reiniciar conteo e historial?')) return;
+    inspectionLog = [];
+    localStorage.removeItem('patchInspectorV4.log');
+    renderLog();
+    toast('Conteo reiniciado. Un pequeño funeral para los datos viejos.');
+  }
+
+  function updateStatus() {
+    els.scaleText.textContent = pxPerMm ? `${pxPerMm.toFixed(3)} px/mm` : 'No calibrada';
+    els.refText.textContent = reference ? `${fmt(reference.widthMm)} × ${fmt(reference.heightMm)} mm` : 'No tomada';
+    if (reference) {
+      els.refDetails.textContent = `Ancho ${fmt(reference.widthMm)} mm · Alto ${fmt(reference.heightMm)} mm · Área ${fmt(reference.areaMm)} mm² · Texto offset ${fmt(reference.textOffsetMm)} mm`;
+      if (reference.thumb) drawCanvasImage(els.refPreview, reference.thumb);
+    }
+  }
+
+  function setWorkflow() {
+    const hasCam = !!stream;
+    const hasCal = !!pxPerMm;
+    const hasRef = !!reference;
+    setStep('stepCamera', hasCam, !hasCam);
+    setStep('stepCal', hasCal, hasCam && !hasCal);
+    setStep('stepRef', hasRef, hasCam && hasCal && !hasRef);
+    setStep('stepAudit', autoEnabled, hasCam && hasCal && hasRef && !autoEnabled);
+  }
+
+  function setStep(id, done, active) {
+    const el = $(id);
+    el.classList.toggle('done', !!done);
+    el.classList.toggle('active', !!active);
+  }
+
+  function renderLastPreview(res) {
+    const data = canvasToDataUrl(els.patch);
+    drawCanvasImage(els.lastPreview, data);
+    els.lastDetails.textContent = `Ancho ${fmt(res.widthMm)} mm · Alto ${fmt(res.heightMm)} mm · Texto ${res.text.found ? fmt(res.text.offsetMm) + ' mm' : 'no detectado'} · ${res.pass ? 'APROBADO' : 'RECHAZADO'}`;
+  }
+
+  function canvasToDataUrl(canvas) {
+    try { return canvas.toDataURL('image/jpeg', 0.86); }
+    catch { return ''; }
+  }
+
+  function drawCanvasImage(canvas, dataUrl) {
+    if (!dataUrl) return;
+    const img = new Image();
+    img.onload = () => {
+      const ctx2 = canvas.getContext('2d');
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      ctx2.clearRect(0, 0, canvas.width, canvas.height);
+      ctx2.drawImage(img, 0, 0);
+    };
+    img.src = dataUrl;
+  }
+
+  function clearPreview(canvas, ctx2) {
+    canvas.width = 320;
+    canvas.height = 180;
+    ctx2.clearRect(0, 0, canvas.width, canvas.height);
+  }
+
+  function deleteAll(...items) {
+    for (const item of items) {
+      if (item && typeof item.delete === 'function') {
+        try { item.delete(); } catch { /* no-op */ }
       }
     }
   }
-  requestAnimationFrame(loop);
-}
 
-function calibrateScale(){
-  if (!grabFrame()) { toast('Primero inicia cámara.'); return; }
-  clearOverlay();
-  const conf = cfg();
-  const pts = [];
-  setWork('Calibración activa', `Toca los dos extremos de una referencia real de ${conf.refMm} mm.`);
-  toast(`Toca 2 puntos de la referencia de ${conf.refMm} mm`, 2400);
+  $('btnStart').addEventListener('click', startCamera);
+  $('btnCalibrate').addEventListener('click', calibrateWithSquare);
+  $('btnReference').addEventListener('click', takeReference);
+  $('btnMeasure').addEventListener('click', measureNow);
+  $('btnAuto').addEventListener('click', toggleAuto);
+  $('btnExport').addEventListener('click', exportCSV);
+  $('btnReset').addEventListener('click', resetLog);
+  $('btnClearCalibration').addEventListener('click', clearCalibration);
+  $('btnClearReference').addEventListener('click', clearReference);
 
-  const onPointer = (ev) => {
-    ev.preventDefault();
-    const rect = overlay.getBoundingClientRect();
-    const x = (ev.clientX - rect.left) * overlay.width / rect.width;
-    const y = (ev.clientY - rect.top) * overlay.height / rect.height;
-    pts.push({x,y});
-    ctx.save();
-    ctx.fillStyle = '#ffd166';
-    ctx.strokeStyle = '#08111f';
-    ctx.lineWidth = 3;
-    ctx.beginPath();
-    ctx.arc(x, y, Math.max(7, overlay.width/160), 0, Math.PI*2);
-    ctx.fill(); ctx.stroke();
-    if (pts.length === 2) {
-      ctx.beginPath();
-      ctx.moveTo(pts[0].x, pts[0].y);
-      ctx.lineTo(pts[1].x, pts[1].y);
-      ctx.strokeStyle = '#ffd166';
-      ctx.lineWidth = 4;
-      ctx.stroke();
-    }
-    ctx.restore();
-    if (pts.length === 2) {
-      overlay.removeEventListener('pointerdown', onPointer);
-      const d = Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y);
-      pxPerMm = d / conf.refMm;
-      localStorage.setItem(STORAGE.scale, String(pxPerMm));
-      updateScaleText();
-      setWork('Escala calibrada', `Escala guardada: ${pxPerMm.toFixed(3)} px/mm. No muevas el celular.`);
-      toast('Escala calibrada');
-    }
-  };
-  overlay.addEventListener('pointerdown', onPointer);
-}
-function saveMaster(){
-  const res = analyzeFrame({ record:false, silent:false });
-  if (!res || !res.signature || !res.visual || !pxPerMm) {
-    toast('No pude guardar maestro. Calibra y coloca una pieza patrón clara.');
-    return;
-  }
-  master = {
-    createdAt: new Date().toLocaleString(),
-    targetW: cfg().targetW,
-    targetH: cfg().targetH,
-    width: res.widthMm ? res.widthMm.toFixed(2) : '',
-    height: res.heightMm ? res.heightMm.toFixed(2) : '',
-    signature: res.signature,
-    visual: res.visual
-  };
-  localStorage.setItem(STORAGE.master, JSON.stringify(master));
-  updateMasterText();
-  toast('Maestro visual guardado');
-}
-function clearMaster(){
-  master = null;
-  localStorage.removeItem(STORAGE.master);
-  updateMasterText();
-  toast('Maestro borrado');
-}
-function exportCSV(){
-  const header = ['Hora','ISO','Lote','Resultado','Ancho mm','Alto mm','Giro grados','Area mm2','Visual maestro %','Contorno maestro %','Motivo'];
-  const rows = log.map(r => [r.time,r.iso,r.lot,r.result,r.width,r.height,r.angle,r.area,r.visual,r.shape,r.reason]);
-  const csv = [header, ...rows].map(row => row.map(csvCell).join(',')).join('\n');
-  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = `historial_parches_${new Date().toISOString().slice(0,10)}.csv`;
-  a.click();
-  URL.revokeObjectURL(a.href);
-}
-function csvCell(value){
-  const s = String(value ?? '');
-  if (/[",\n]/.test(s)) return `"${s.replace(/"/g,'""')}"`;
-  return s;
-}
-function resetLog(){
-  if (!confirm('¿Reiniciar conteo e historial de este navegador?')) return;
-  log = [];
-  localStorage.removeItem(STORAGE.log);
   renderLog();
-  setDecision(null, 'Historial reiniciado.');
-  toast('Conteo reiniciado');
-}
-function snapshot(){
-  if (!grabFrame()) { toast('Primero inicia cámara.'); return; }
-  const a = document.createElement('a');
-  a.href = capture.toDataURL('image/jpeg', 0.92);
-  a.download = `foto_parche_${new Date().toISOString().replace(/[:.]/g,'-')}.jpg`;
-  a.click();
-}
-function toggleAuto(){
-  if (!pxPerMm) { toast('Calibra escala antes de usar automático.'); return; }
-  autoMode = !autoMode;
-  autoState = 'WAITING';
-  stableResults = [];
-  missingFrames = 0;
-  $('btnAuto').dataset.active = String(autoMode);
-  $('btnAuto').textContent = `Auto: ${autoMode ? 'ON' : 'OFF'}`;
-  $('btnAuto').classList.toggle('primary', autoMode);
-  setWork(autoMode ? 'Auto encendido' : 'Auto apagado', autoMode ? 'Coloca una pieza, espera resultado y retírala para la siguiente.' : 'Usa medición manual o vuelve a activar automático.');
-  toast(autoMode ? 'Medición automática activa' : 'Medición automática detenida');
-}
-
-$('btnStart').addEventListener('click', startCamera);
-$('btnCalibrate').addEventListener('click', calibrateScale);
-$('btnMeasure').addEventListener('click', () => analyzeFrame({ record:true }));
-$('btnAuto').addEventListener('click', toggleAuto);
-$('btnSaveMaster').addEventListener('click', saveMaster);
-$('btnClearMaster').addEventListener('click', clearMaster);
-$('btnSnapshot').addEventListener('click', snapshot);
-$('btnExport').addEventListener('click', exportCSV);
-$('btnReset').addEventListener('click', resetLog);
-$('btnSaveConfig').addEventListener('click', saveConfig);
-
-loadConfig();
-updateScaleText();
-updateMasterText();
-renderLog();
-setDecision(null, 'Inicia la cámara y calibra con una referencia real.');
+  updateStatus();
+  setWorkflow();
+  clearPreview(els.refPreview, refCtx);
+  clearPreview(els.lastPreview, lastCtx);
+  if (reference && reference.thumb) drawCanvasImage(els.refPreview, reference.thumb);
+})();

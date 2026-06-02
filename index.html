@@ -3,50 +3,49 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <meta name="theme-color" content="#08111f" />
-  <title>Inspector de Parches Pro | Mardur</title>
+  <meta name="theme-color" content="#07101f" />
+  <title>Inspector de Parches Pro v4 | Mardur</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
   <header class="app-header">
     <div>
-      <p class="eyebrow">Control visual textil</p>
-      <h1>Inspector de Parches Pro</h1>
-      <p class="subtitle">Medición con celular, bloqueo anti-duplicado, maestro visual y exportación por lote.</p>
+      <h1>Inspector de Parches Pro v4</h1>
+      <p>Calibra con cuadro 5×5 cm, retíralo, toma una referencia aprobada y audita por tamaño, forma y texto centrado.</p>
     </div>
-    <div class="header-actions">
-      <span id="cvBadge" class="badge warn">Cargando OpenCV</span>
+    <div class="status-stack">
+      <span id="opencvBadge" class="badge warn">Cargando OpenCV</span>
       <span id="cameraBadge" class="badge idle">Sin cámara</span>
     </div>
   </header>
 
   <main class="layout">
-    <section class="card camera-card">
-      <div class="toolbar top-toolbar">
+    <section class="camera-panel card">
+      <div class="workflow">
+        <div id="stepCamera" class="step active"><strong>1</strong><span>Inicia cámara</span></div>
+        <div id="stepCal" class="step"><strong>2</strong><span>Calibra 5×5 cm</span></div>
+        <div id="stepRef" class="step"><strong>3</strong><span>Toma referencia</span></div>
+        <div id="stepAudit" class="step"><strong>4</strong><span>Audita</span></div>
+      </div>
+
+      <div class="video-wrap">
+        <video id="video" playsinline autoplay muted></video>
+        <canvas id="overlay"></canvas>
+        <canvas id="frameCanvas" hidden></canvas>
+        <canvas id="patchCanvas" hidden></canvas>
+        <div id="centerGuide" class="center-guide"></div>
+      </div>
+
+      <div class="controls main-controls">
         <button id="btnStart" class="primary">Iniciar cámara</button>
-        <button id="btnCalibrate" class="secondary">Calibrar escala</button>
-        <button id="btnMeasure">Medir y registrar</button>
+        <button id="btnCalibrate" class="secondary">Calibrar con cuadro 5×5</button>
+        <button id="btnReference" class="secondary">Tomar referencia aprobada</button>
+        <button id="btnMeasure">Medir ahora</button>
         <button id="btnAuto" data-active="false">Auto: OFF</button>
       </div>
 
-      <div class="video-stage" id="videoStage">
-        <video id="video" playsinline autoplay muted></video>
-        <canvas id="overlay"></canvas>
-        <canvas id="captureCanvas" hidden></canvas>
-        <div id="guideBox" class="guide-box">
-          <span>zona recomendada</span>
-        </div>
-      </div>
-
-      <div class="status-line">
-        <strong id="workState">Listo para iniciar</strong>
-        <span id="workHint">Usa fondo sólido mate y celular fijo. La app no adivina geometría por inspiración divina.</span>
-      </div>
-
-      <div class="toolbar">
-        <button id="btnSaveMaster">Guardar maestro visual</button>
-        <button id="btnClearMaster" class="danger-soft">Borrar maestro</button>
-        <button id="btnSnapshot">Descargar foto actual</button>
+      <div class="instructions">
+        <strong>Flujo recomendado:</strong> coloca el cuadro negro 5×5 cm sobre la mesa, calibra, retira el cuadro sin mover el celular, coloca un parche bueno, toma referencia y después audita.
       </div>
     </section>
 
@@ -54,74 +53,79 @@
       <section class="card result-card">
         <h2>Resultado</h2>
         <div id="decision" class="decision neutral">ESPERANDO</div>
-        <p id="reason" class="reason">Inicia cámara, calibra escala y coloca el parche completo en cuadro.</p>
+        <p id="reason" class="reason">Inicia cámara, calibra y toma referencia.</p>
         <div class="metrics">
           <div><span>Ancho</span><strong id="mWidth">--</strong></div>
           <div><span>Alto</span><strong id="mHeight">--</strong></div>
-          <div><span>Giro</span><strong id="mAngle">--</strong></div>
           <div><span>Área</span><strong id="mArea">--</strong></div>
-          <div><span>Visual maestro</span><strong id="mVisual">--</strong></div>
-          <div><span>Contorno maestro</span><strong id="mShape">--</strong></div>
+          <div><span>Giro</span><strong id="mAngle">--</strong></div>
+          <div><span>Texto offset</span><strong id="mTextOffset">--</strong></div>
+          <div><span>Diferencia texto</span><strong id="mTextDelta">--</strong></div>
         </div>
       </section>
 
       <section class="card">
-        <div class="section-title">
-          <h2>Configuración</h2>
-          <button id="btnSaveConfig" class="small-btn">Guardar</button>
+        <h2>Estado de calibración</h2>
+        <div class="status-list">
+          <div><span>Escala</span><strong id="scaleText">No calibrada</strong></div>
+          <div><span>Referencia</span><strong id="refText">No tomada</strong></div>
+          <div><span>Automático</span><strong id="autoStateText">Inactivo</strong></div>
         </div>
+        <div class="controls stack">
+          <a class="button-link" href="plantilla_calibracion.html" target="_blank">Abrir plantilla 5×5</a>
+          <button id="btnClearCalibration" class="danger-soft">Borrar calibración</button>
+          <button id="btnClearReference" class="danger-soft">Borrar referencia</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Configuración</h2>
         <label>Lote / referencia
           <input id="lotName" value="Hidalgo" />
         </label>
         <div class="grid2">
-          <label>Ancho objetivo mm
-            <input id="targetW" type="number" value="65" step="0.1" />
+          <label>Cuadro calibración mm
+            <input id="squareMm" type="number" value="50" step="1" />
           </label>
-          <label>Alto objetivo mm
-            <input id="targetH" type="number" value="73" step="0.1" />
+          <label>Tolerancia tamaño %
+            <input id="tolSizePct" type="number" value="3" step="0.1" />
           </label>
-          <label>Tolerancia ancho ±mm
-            <input id="tolW" type="number" value="1.5" step="0.1" />
+          <label>Tolerancia área %
+            <input id="tolAreaPct" type="number" value="6" step="0.1" />
           </label>
-          <label>Tolerancia alto ±mm
-            <input id="tolH" type="number" value="1.5" step="0.1" />
+          <label>Texto contra referencia ±mm
+            <input id="tolTextRefMm" type="number" value="1.5" step="0.1" />
           </label>
-          <label>Giro máximo °
-            <input id="tolAngle" type="number" value="22" step="0.5" />
+          <label>Texto centro absoluto ±mm
+            <input id="tolTextAbsMm" type="number" value="2.5" step="0.1" />
           </label>
-          <label>Referencia mm
-            <input id="refMm" type="number" value="50" step="1" />
+          <label>Máx. giro permitido °
+            <input id="tolAngle" type="number" value="25" step="0.5" />
           </label>
-          <label>Área mínima % imagen
-            <input id="minAreaPct" type="number" value="0.35" step="0.05" />
+          <label>Inicio zona texto %
+            <input id="textStartPct" type="number" value="62" step="1" />
           </label>
-          <label>Auto: espera ms
-            <input id="autoDelay" type="number" value="850" step="50" />
+          <label>Umbral texto oscuro
+            <input id="textThreshold" type="number" value="95" step="1" />
           </label>
-          <label>Visual mínimo %
-            <input id="visualMin" type="number" value="68" step="1" />
+          <label>Umbral parche claro
+            <input id="patchThreshold" type="number" value="55" step="1" />
           </label>
-          <label>Contorno mínimo %
-            <input id="shapeMin" type="number" value="72" step="1" />
+          <label>Área mínima parche %
+            <input id="minPatchAreaPct" type="number" value="1" step="0.1" />
           </label>
         </div>
-        <label class="check-row">
-          <input id="useMaster" type="checkbox" checked /> Usar maestro visual cuando exista
-        </label>
-        <p id="scaleText" class="small">Escala: no calibrada.</p>
-        <p id="masterText" class="small">Maestro: no guardado.</p>
-        <a href="plantilla_calibracion.html" target="_blank" class="print-link">Abrir plantilla imprimible de calibración</a>
       </section>
 
       <section class="card">
-        <h2>Conteo del lote</h2>
+        <h2>Conteo</h2>
         <div class="counter">
           <div><span>Aprobados</span><strong id="okCount">0</strong></div>
           <div><span>Rechazados</span><strong id="badCount">0</strong></div>
           <div><span>Total</span><strong id="totalCount">0</strong></div>
           <div><span>% OK</span><strong id="okPct">--</strong></div>
         </div>
-        <div class="toolbar stack">
+        <div class="controls stack">
           <button id="btnExport">Exportar CSV</button>
           <button id="btnReset" class="danger">Reiniciar conteo</button>
         </div>
@@ -129,16 +133,28 @@
     </aside>
   </main>
 
-  <section class="card log-card">
-    <div class="section-title">
-      <h2>Historial</h2>
-      <span id="logInfo" class="small">Últimas 800 mediciones guardadas en este navegador.</span>
+  <section class="card preview-card">
+    <div class="preview-grid">
+      <div>
+        <h2>Referencia aprobada</h2>
+        <canvas id="refPreview" class="preview-canvas"></canvas>
+        <p id="refDetails" class="small">Sin referencia.</p>
+      </div>
+      <div>
+        <h2>Última pieza medida</h2>
+        <canvas id="lastPreview" class="preview-canvas"></canvas>
+        <p id="lastDetails" class="small">Sin medición.</p>
+      </div>
     </div>
+  </section>
+
+  <section class="card log-card">
+    <h2>Historial</h2>
     <div class="table-wrap">
       <table>
         <thead>
           <tr>
-            <th>Hora</th><th>Lote</th><th>Resultado</th><th>Ancho</th><th>Alto</th><th>Giro</th><th>Visual</th><th>Contorno</th><th>Motivo</th>
+            <th>Hora</th><th>Lote</th><th>Resultado</th><th>Ancho</th><th>Alto</th><th>Área</th><th>Texto offset</th><th>Texto delta</th><th>Motivo</th>
           </tr>
         </thead>
         <tbody id="logBody"></tbody>
@@ -149,6 +165,7 @@
   <div id="toast" class="toast"></div>
 
   <script>
+    window.cvReady = false;
     window.Module = {
       onRuntimeInitialized() {
         window.cvReady = true;
@@ -156,7 +173,7 @@
       }
     };
   </script>
+  <script src="app.js"></script>
   <script async src="https://docs.opencv.org/4.x/opencv.js"></script>
-  <script src="app.js" defer></script>
 </body>
 </html>
