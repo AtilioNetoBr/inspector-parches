@@ -1,62 +1,79 @@
-# Inspector de Parches Pro v6
+# Inspector de Parches Pro v7
 
-Versión orientada a trabajo real: separa claramente la calibración de escala 5×5 de los criterios de rechazo. Por defecto, la decisión se basa en texto centrado, no en tamaño.
+Versión enfocada en operación seria:
 
-## Flujo recomendado
-
-1. Abre `index.html` desde GitHub Pages en el celular.
-2. Presiona **Iniciar cámara**.
-3. Coloca el cuadro negro de 5×5 cm sobre la tarjeta blanca.
-4. Presiona **Calibrar auto 5×5**.
-5. Si no detecta estable, usa **Calibrar manual 4 esquinas**.
-6. Retira el cuadro sin mover el celular.
-7. Coloca un parche aprobado.
-8. Presiona **Tomar referencia aprobada**.
-9. Activa **Auto: ON**.
-10. Coloca un parche, espera resultado, retira el parche y continúa.
-
-## Criterios de rechazo
-
-Por defecto solo está activo:
-
-- Rechazar si el texto no está centrado.
-
-Opcionales:
-
-- Rechazar por medida contra referencia.
-- Rechazar por área/forma contra referencia.
-- Rechazar por giro excesivo.
-
-La escala 5×5 solo sirve para convertir pixeles a milímetros. No debe forzar por sí sola un rechazo.
-
-## Monitor en PC
-
-1. Abre `monitor.html` en la PC.
-2. Copia el ID que aparece.
-3. En el celular, pega ese ID en la sección **Monitor en PC**.
-4. Presiona **Transmitir a PC**.
-
-Notas:
-
-- Esta función usa PeerJS público para conectar celular y PC. Requiere internet.
-- Para producción cerrada, conviene montar un servidor local propio de señalización/WebRTC.
-
-## Estación física recomendada
-
-- Celular fijo arriba de la mesa.
-- Fondo negro mate.
-- Luz pareja y fija.
-- Cuadro de calibración sobre el mismo plano que el parche.
-- Recalibrar si el celular o la mesa se mueven.
+- Calibración con cuadro negro de **5 x 5 cm** sobre tarjeta blanca.
+- Opción automática y opción manual de **4 esquinas**.
+- Medición métrica usando homografía: más confiable que solo px/mm.
+- Reporta tamaño real **X x X cm**.
+- Reporta **perímetro de la figura** en cm.
+- Reporta área en cm².
+- Detecta el texto en la zona inferior configurable.
+- Compara el centro del texto contra el centro del parche.
+- Muestra márgenes izquierdo/derecho del texto.
+- Criterios activables: texto, tamaño, área, perímetro y giro.
+- Monitor en PC con `monitor.html`.
+- Exportación CSV.
 
 ## Archivos
 
-Subir a la raíz del repositorio:
+Subir todos estos archivos sueltos a la raíz del repositorio de GitHub Pages:
 
-- `index.html`
-- `app.js`
-- `styles.css`
-- `monitor.html`
-- `monitor.js`
-- `plantilla_calibracion.html`
-- `README.md`
+```text
+index.html
+app.js
+styles.css
+monitor.html
+monitor.js
+plantilla_calibracion.html
+README.md
+```
+
+## Flujo recomendado
+
+1. Abrir la app en el celular desde GitHub Pages.
+2. Presionar **Iniciar cámara**.
+3. Colocar el cuadro negro 5 x 5 cm sobre la tarjeta blanca.
+4. Usar **Calibrar 4 esquinas** como método principal de trabajo serio.
+5. Tocar las cuatro esquinas del cuadro negro.
+6. Retirar el cuadro sin mover el celular.
+7. Colocar un parche aprobado.
+8. Presionar **Tomar referencia aprobada**.
+9. Activar únicamente el criterio **Texto centrado** al inicio.
+10. Auditar.
+
+## Recomendación inicial de criterios
+
+- Texto centrado: ON
+- Tamaño vs referencia: OFF
+- Área vs referencia: OFF
+- Perímetro vs referencia: OFF
+- Giro: OFF
+- Tolerancia texto: ±2.0 mm
+
+Después de validar con piezas buenas y malas conocidas, activar tamaño/perímetro si hace falta.
+
+## Monitor en PC
+
+1. En la PC abrir:
+
+```text
+https://TU_USUARIO.github.io/inspector-parches/monitor.html?v=7
+```
+
+2. Copiar el ID que aparece.
+3. En el celular pegarlo en el campo Monitor en PC.
+4. Presionar **Transmitir a PC**.
+
+## Condiciones físicas
+
+- Celular fijo arriba de la mesa.
+- No mover el celular después de calibrar.
+- Fondo sólido mate.
+- Buena luz sin sombras duras.
+- La tarjeta 5 x 5 debe estar en el mismo plano donde irá el parche.
+- El parche debe verse completo.
+
+## Nota importante
+
+La detección automática del 5 x 5 existe, pero para trabajo serio el método recomendado es **Calibrar 4 esquinas**. No es retroceder: es control metrológico. La app valida tamaño real con esos puntos y evita depender de iluminación caprichosa.

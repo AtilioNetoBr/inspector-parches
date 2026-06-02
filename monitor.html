@@ -5,46 +5,50 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Monitor PC | Inspector de Parches</title>
   <link rel="stylesheet" href="styles.css" />
+  <style>
+    .monitor-layout{display:grid;grid-template-columns:1fr 360px;gap:14px;padding:14px}.monitor-video{min-height:72vh;background:#030812;border-radius:18px;overflow:hidden;display:grid;place-items:center}.monitor-video video{position:static;width:100%;height:100%;object-fit:contain}.idbox{font-size:22px;font-weight:950;background:#07101f;border:1px solid var(--line);border-radius:12px;padding:12px;word-break:break-all}.statusline{font-size:14px;color:var(--muted)}@media(max-width:900px){.monitor-layout{grid-template-columns:1fr}.monitor-video{min-height:52vh}}
+  </style>
 </head>
 <body>
-  <header class="topbar">
-    <div>
-      <h1>Monitor PC <span>Inspector v6</span></h1>
-      <p>Vista en vivo desde el celular.</p>
-    </div>
-    <span id="monitorStatus" class="badge idle">Esperando celular</span>
-  </header>
-
-  <main class="monitor-layout">
+<header class="app-header">
+  <div>
+    <h1>Monitor PC</h1>
+    <p>Abre esta pantalla en la computadora. Copia el ID y pégalo en el celular.</p>
+  </div>
+  <span id="statusBadge" class="badge idle">Esperando celular</span>
+</header>
+<main class="monitor-layout">
+  <section class="card monitor-video">
+    <video id="remoteVideo" autoplay playsinline muted></video>
+  </section>
+  <aside class="side-panel">
     <section class="card">
-      <h2>Conexión</h2>
-      <p class="small">Copia este ID en el celular, sección “Monitor en PC”.</p>
-      <div class="copybox">
-        <strong id="myPeerId">Generando ID...</strong>
-        <button id="btnCopy">Copiar</button>
-      </div>
-      <p id="connText" class="small">Abre esta página primero en la PC. Luego conecta desde el celular.</p>
+      <h2>ID del monitor</h2>
+      <div id="peerId" class="idbox">Generando...</div>
+      <p class="small">Pega este ID en la app del celular y toca “Transmitir a PC”.</p>
     </section>
-
-    <section class="card monitor-video-card">
-      <video id="remoteVideo" autoplay playsinline muted></video>
-    </section>
-
     <section class="card result-card">
-      <h2>Resultado actual</h2>
-      <div id="remoteDecision" class="decision neutral">SIN DATO</div>
-      <p id="remoteReason" class="reason">Esperando resultado del celular.</p>
+      <h2>Resultado en vivo</h2>
+      <div id="decision" class="decision neutral">ESPERANDO</div>
+      <p id="reason" class="reason">Sin medición todavía.</p>
       <div class="metrics">
-        <div><span>Ancho</span><strong id="rWidth">--</strong></div>
-        <div><span>Alto</span><strong id="rHeight">--</strong></div>
-        <div><span>Texto offset</span><strong id="rText">--</strong></div>
-        <div><span>Total</span><strong id="rTotal">--</strong></div>
+        <div><span>Tamaño</span><strong id="mSize">--</strong></div>
+        <div><span>Perímetro</span><strong id="mPerimeter">--</strong></div>
+        <div><span>Área</span><strong id="mArea">--</strong></div>
+        <div><span>Texto</span><strong id="mText">--</strong></div>
       </div>
     </section>
-  </main>
-
-  <div id="toast" class="toast"></div>
-  <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
-  <script src="monitor.js"></script>
+    <section class="card">
+      <h2>Conteo</h2>
+      <div class="counter">
+        <div><span>Total</span><strong id="totalCount">0</strong></div>
+        <div><span>Aprobados</span><strong id="okCount">0</strong></div>
+      </div>
+      <p id="connectionText" class="statusline">Esperando conexión...</p>
+    </section>
+  </aside>
+</main>
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script src="monitor.js"></script>
 </body>
 </html>

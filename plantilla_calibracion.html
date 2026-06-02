@@ -1,15 +1,25 @@
 <!doctype html>
 <html lang="es">
 <head>
-  <meta charset="utf-8" />
-  <title>Plantilla 5x5 cm</title>
-  <style>
-    @page{size:letter;margin:15mm}body{font-family:Arial,sans-serif} .card{width:70mm;height:70mm;border:0.35mm solid #111;display:grid;place-items:center;margin:20mm auto;background:white}.square{width:50mm;height:50mm;background:#000}.note{text-align:center;font-size:12pt}.cut{text-align:center;color:#555;font-size:10pt}
-  </style>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Plantilla 5 x 5 cm</title>
+<style>
+  @page{size:letter;margin:18mm}
+  body{font-family:Arial, sans-serif;color:#111;margin:0;padding:20px;background:white}
+  .sheet{display:grid;gap:20px;justify-items:center}
+  h1{font-size:18px;margin:0}.note{font-size:12px;text-align:center;max-width:520px;line-height:1.35}.card{width:70mm;height:70mm;border:0.35mm solid #111;display:grid;place-items:center;background:#fff}.square{width:50mm;height:50mm;background:#000}.ruler{display:flex;gap:10px;align-items:center;font-size:12px}.line{width:50mm;border-top:0.4mm solid #111}.print{margin-top:20px;padding:10px 14px;border:1px solid #111;background:#f3f3f3;border-radius:8px}.warn{font-weight:bold}
+  @media print{.print{display:none}}
+</style>
 </head>
 <body>
-  <p class="note"><strong>Tarjeta de calibración</strong><br>Cuadro negro exacto: 50 mm × 50 mm</p>
+<div class="sheet">
+  <h1>Plantilla de calibración 5 x 5 cm</h1>
+  <p class="note">Imprimir al 100%, sin “ajustar a página”. Verificar con regla física que el cuadro negro mida exactamente 50 mm por 50 mm. Si la impresora escala, todo el sistema miente con mucha seguridad, que es la peor forma de mentir.</p>
   <div class="card"><div class="square"></div></div>
-  <p class="cut">Imprimir al 100%, sin ajustar a página. Verificar con regla antes de usar.</p>
+  <div class="ruler"><span>Control:</span><div class="line"></div><span>50 mm</span></div>
+  <p class="note warn">Para calibrar: coloca esta tarjeta plana sobre la misma mesa donde irá el parche. Luego retírala sin mover el celular.</p>
+  <button class="print" onclick="window.print()">Imprimir plantilla</button>
+</div>
 </body>
 </html>
