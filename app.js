@@ -19,9 +19,19 @@ let stream = null;
 let autoMode = false;
 let lastAutoTs = 0;
 let waitingRemoval = false;
-let calibration = JSON.parse(localStorage.getItem('patchCalV8') || 'null');
-let reference = JSON.parse(localStorage.getItem('patchRefV8') || 'null');
-let log = JSON.parse(localStorage.getItem('patchLogV8') || '[]');
+function safeJson(key, fallback){
+  try{
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : fallback;
+  }catch(e){
+    console.warn('Dato local corrupto:', key, e);
+    localStorage.removeItem(key);
+    return fallback;
+  }
+}
+let calibration = safeJson('patchCalV81', null) || safeJson('patchCalV8', null);
+let reference = safeJson('patchRefV81', null) || safeJson('patchRefV8', null);
+let log = safeJson('patchLogV81', []) || [];
 let lastResult = null;
 let peer = null;
 let monitorCall = null;
@@ -30,6 +40,17 @@ let monitorConn = null;
 window.addEventListener('cv-ready', () => {
   $('cvBadge').textContent = 'OpenCV listo';
   $('cvBadge').className = 'badge live';
+});
+
+window.addEventListener('error', (ev) => {
+  console.error('Error JS:', ev.error || ev.message);
+  try{
+    setStatus('Error sistema','bad');
+    setDecision('ERROR', 'bad', 'Hubo un error de JavaScript. Recarga con ?v=8.1 y revisa que subiste todos los archivos nuevos.');
+  }catch(e){}
+});
+window.addEventListener('unhandledrejection', (ev) => {
+  console.error('Promesa rechazada:', ev.reason);
 });
 
 function toast(msg, ms = 2100){
@@ -67,30 +88,102 @@ function updateState(){
 }
 updateState();
 
+function describeCameraError(err){
+  const name = err && err.name ? err.name : 'Error desconocido';
+  const secure = window.isSecureContext || location.hostname === 'localhost';
+  if(!secure) return 'La cámara requiere HTTPS. Abre la página publicada en GitHub Pages, no el archivo local.';
+  if(name === 'NotAllowedError' || name === 'SecurityError') return 'Permiso de cámara bloqueado. En Safari/Chrome permite cámara para este sitio y recarga.';
+  if(name === 'NotFoundError' || name === 'DevicesNotFoundError') return 'No se encontró cámara disponible.';
+  if(name === 'NotReadableError' || name === 'TrackStartError') return 'La cámara está ocupada por otra app o el navegador no la pudo iniciar.';
+  if(name === 'OverconstrainedError' || name === 'ConstraintNotSatisfiedError') return 'La cámara no aceptó esa configuración. Intentando con configuración simple.';
+  return `${name}: ${err && err.message ? err.message : 'no se pudo abrir cámara.'}`;
+}
+function waitForVideoReady(timeoutMs=5000){
+  return new Promise((resolve, reject) => {
+    if(video.videoWidth && video.videoHeight) return resolve();
+    const t = setTimeout(() => { cleanup(); reject(new Error('La cámara abrió, pero no entregó video.')); }, timeoutMs);
+    function cleanup(){ clearTimeout(t); video.removeEventListener('loadedmetadata', onReady); video.removeEventListener('canplay', onReady); }
+    function onReady(){ cleanup(); resolve(); }
+    video.addEventListener('loadedmetadata', onReady, {once:true});
+    video.addEventListener('canplay', onReady, {once:true});
+  });
+}
+function stopCurrentStream(){
+  try{ if(stream) stream.getTracks().forEach(t => t.stop()); }catch(e){}
+  stream = null;
+  video.srcObject = null;
+}
+async function openWithConstraints(constraints){
+  const s = await navigator.mediaDevices.getUserMedia(constraints);
+  stopCurrentStream();
+  stream = s;
+  video.setAttribute('playsinline','');
+  video.setAttribute('webkit-playsinline','');
+  video.muted = true;
+  video.autoplay = true;
+  video.srcObject = stream;
+  await waitForVideoReady(6000).catch(()=>{});
+  try{ await video.play(); }catch(e){ console.warn('video.play', e); }
+  if(!video.videoWidth || !video.videoHeight) await waitForVideoReady(3000);
+  resizeCanvas();
+  return stream;
+}
 async function startCamera(){
-  const attempts = [
-    { video: { facingMode: { exact: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: false },
-    { video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false },
-    { video: { facingMode: 'environment' }, audio: false },
-    { video: true, audio: false }
-  ];
-  let lastErr = null;
-  for(const constraints of attempts){
+  $('btnStart').disabled = true;
+  setStatus('Abriendo cámara...','warn');
+  setDecision('CÁMARA', 'neutral', 'Solicitando permiso de cámara.');
+  try{
+    if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+      throw new Error('Este navegador no soporta acceso a cámara. Usa Safari/Chrome actualizado.');
+    }
+    if(!(window.isSecureContext || location.hostname === 'localhost')){
+      throw new Error('La cámara solo funciona en HTTPS. Usa la URL de GitHub Pages.');
+    }
+
+    const attempts = [
+      { label:'trasera simple', constraints:{ video:{ facingMode:{ ideal:'environment' } }, audio:false } },
+      { label:'trasera 1280', constraints:{ video:{ facingMode:{ ideal:'environment' }, width:{ ideal:1280 }, height:{ ideal:720 } }, audio:false } },
+      { label:'cualquier cámara', constraints:{ video:true, audio:false } }
+    ];
+    let lastErr = null;
+    for(const a of attempts){
+      try{
+        await openWithConstraints(a.constraints);
+        setStatus('Cámara activa','live');
+        setDecision('LISTO', 'neutral', `Cámara activa: ${video.videoWidth}×${video.videoHeight}. Ahora calibra la tarjeta.`);
+        toast(`Cámara iniciada (${a.label})`);
+        requestAnimationFrame(loop);
+        $('btnStart').disabled = false;
+        return;
+      }catch(err){ lastErr = err; console.warn('Fallo cámara', a.label, err); }
+    }
+
+    // Respaldo: pedir permisos, enumerar cámaras y probar una por una.
     try{
-      stream = await navigator.mediaDevices.getUserMedia(constraints);
-      video.srcObject = stream;
-      await video.play();
-      resizeCanvas();
-      setStatus('Cámara activa','live');
-      toast('Cámara iniciada');
-      requestAnimationFrame(loop);
-      return;
-    }catch(err){ lastErr = err; }
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const cams = devices.filter(d => d.kind === 'videoinput');
+      for(const cam of cams.reverse()){
+        try{
+          await openWithConstraints({ video:{ deviceId:{ exact: cam.deviceId } }, audio:false });
+          setStatus('Cámara activa','live');
+          setDecision('LISTO', 'neutral', `Cámara activa: ${video.videoWidth}×${video.videoHeight}. Ahora calibra la tarjeta.`);
+          toast('Cámara iniciada por deviceId');
+          requestAnimationFrame(loop);
+          $('btnStart').disabled = false;
+          return;
+        }catch(err){ lastErr = err; console.warn('Fallo deviceId', cam.label, err); }
+      }
+    }catch(e){ console.warn('enumerateDevices falló', e); }
+
+    throw lastErr || new Error('No se pudo abrir ninguna cámara.');
+  }catch(err){
+    console.error(err);
+    setStatus('Error cámara','bad');
+    setDecision('ERROR CÁMARA', 'bad', describeCameraError(err));
+    toast(describeCameraError(err), 5200);
+  }finally{
+    $('btnStart').disabled = false;
   }
-  console.error(lastErr);
-  setStatus('Error cámara','bad');
-  const secure = location.protocol === 'https:' || location.hostname === 'localhost';
-  toast(secure ? 'No se pudo abrir cámara. Revisa permisos o cámara ocupada.' : 'La cámara requiere HTTPS. Usa GitHub Pages.', 3600);
 }
 
 function resizeCanvas(){
@@ -374,7 +467,7 @@ async function calibrateCardStable(){
     timestamp: nowText(),
     note: 'Tarjeta exterior 70mm / interior 50mm detectada automáticamente'
   };
-  localStorage.setItem('patchCalV8', JSON.stringify(calibration));
+  localStorage.setItem('patchCalV81', JSON.stringify(calibration));
   matToCanvas(best.warped, cardCanvas);
   drawCardOverlay(best.points, true);
   best.warped.delete();
@@ -690,7 +783,7 @@ function analyzeFrame(record=false, referenceMode=false){
         textOffsetMm: textInfo && textInfo.found ? textInfo.offsetMm : null,
         timestamp: nowText()
       };
-      localStorage.setItem('patchRefV8', JSON.stringify(reference));
+      localStorage.setItem('patchRefV81', JSON.stringify(reference));
       updateState();
       setDecision('REFERENCIA OK','ok',`Referencia guardada: ${widthCm.toFixed(2)} × ${heightCm.toFixed(2)} cm, perímetro ${perimeterCm.toFixed(2)} cm.`);
       toast('Referencia aprobada guardada');
@@ -760,7 +853,7 @@ function addLog(r){
   };
   log.unshift(row);
   log = log.slice(0, 1000);
-  localStorage.setItem('patchLogV8', JSON.stringify(log));
+  localStorage.setItem('patchLogV81', JSON.stringify(log));
   renderLog();
 }
 function renderLog(){
@@ -853,7 +946,7 @@ $('btnReference').onclick = () => analyzeFrame(false, true);
 $('btnMeasure').onclick = () => analyzeFrame(true, false);
 $('btnAuto').onclick = toggleAuto;
 $('btnExport').onclick = exportCSV;
-$('btnReset').onclick = () => { log=[]; localStorage.removeItem('patchLogV8'); renderLog(); toast('Historial reiniciado'); };
+$('btnReset').onclick = () => { log=[]; localStorage.removeItem('patchLogV81'); renderLog(); toast('Historial reiniciado'); };
 $('btnConnectMonitor').onclick = connectMonitor;
 $('btnStopMonitor').onclick = stopMonitor;
 

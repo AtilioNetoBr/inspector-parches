@@ -1,4 +1,4 @@
-# Inspector de Parches Pro v8
+# Inspector de Parches Pro v8.1
 
 Webapp para inspección con celular publicada en GitHub Pages.
 
@@ -55,3 +55,9 @@ Copiar el ID generado y pegarlo en el celular en la sección Monitor PC.
 ## Nota técnica importante
 
 La tarjeta se usa para calibración. Si se retira, la precisión depende de que el celular quede fijo y de que el parche se mida en la misma zona. Para máxima precisión metrológica, la tarjeta debería poder entrar y salir siempre al mismo plano y posición.
+
+
+## v8.1
+- Cámara reforzada con más respaldos de permisos, deviceId y mensajes de error.
+- Carga local segura de datos guardados para evitar bloqueo por localStorage corrupto.
+- Usa `?v=8.1` al abrir GitHub Pages para evitar caché.

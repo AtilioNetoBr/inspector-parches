@@ -3,14 +3,14 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <title>Inspector de Parches Pro v8</title>
+  <title>Inspector de Parches Pro v8.1</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
   <header class="topbar">
     <div>
-      <h1>Inspector de Parches Pro v8</h1>
-      <p>Tarjeta 7×7 / negro 5×5, silueta, perímetro y alineación de texto.</p>
+      <h1>Inspector de Parches Pro v8.1</h1>
+      <p>Tarjeta 7×7 / negro 5×5, silueta, perímetro, alineación y cámara reforzada.</p>
     </div>
     <div class="badges">
       <span id="cvBadge" class="badge warn">OpenCV cargando</span>
@@ -158,7 +158,7 @@
   <div id="toast" class="toast"></div>
 
   <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
-  <script async src="https://docs.opencv.org/4.x/opencv.js" onload="cv['onRuntimeInitialized']=()=>{window.cvReady=true; window.dispatchEvent(new Event('cv-ready'));}"></script>
+  <script async src="https://docs.opencv.org/4.x/opencv.js" onload="if(window.cv){cv['onRuntimeInitialized']=()=>{window.cvReady=true; window.dispatchEvent(new Event('cv-ready'));}}"></script>
   <script src="app.js"></script>
 </body>
 </html>
