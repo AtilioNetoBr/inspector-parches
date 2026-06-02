@@ -95,31 +95,111 @@
   window.addEventListener('orientationchange', () => setTimeout(resizeOverlay, 400));
 
   async function startCamera() {
-    try {
-      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        throw new Error('getUserMedia no disponible');
+    const attempts = [
+      {
+        name: 'cámara trasera alta',
+        constraints: { video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: false }
+      },
+      {
+        name: 'cámara trasera media',
+        constraints: { video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false }
+      },
+      {
+        name: 'cualquier cámara',
+        constraints: { video: true, audio: false }
+      },
+      {
+        name: 'cámara frontal',
+        constraints: { video: { facingMode: { ideal: 'user' }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false }
       }
-      if (stream) stream.getTracks().forEach(t => t.stop());
-      stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: { ideal: 'environment' },
-          width: { ideal: 1920 },
-          height: { ideal: 1080 }
-        },
-        audio: false
-      });
+    ];
+
+    try {
+      if (!window.isSecureContext) {
+        throw Object.assign(new Error('La página no está en HTTPS o localhost.'), { name: 'InsecureContextError' });
+      }
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        throw Object.assign(new Error('Este navegador no permite acceso a cámara con getUserMedia.'), { name: 'GetUserMediaMissing' });
+      }
+
+      if (stream) {
+        stream.getTracks().forEach(t => t.stop());
+        stream = null;
+      }
+
+      let newStream = null;
+      let usedAttempt = '';
+      let lastError = null;
+
+      for (const attempt of attempts) {
+        try {
+          newStream = await navigator.mediaDevices.getUserMedia(attempt.constraints);
+          usedAttempt = attempt.name;
+          break;
+        } catch (err) {
+          lastError = err;
+          console.warn(`Fallo ${attempt.name}:`, err);
+        }
+      }
+
+      if (!newStream) throw lastError || new Error('No se pudo iniciar ninguna cámara.');
+
+      stream = newStream;
+      els.video.setAttribute('playsinline', '');
+      els.video.setAttribute('webkit-playsinline', '');
+      els.video.muted = true;
+      els.video.autoplay = true;
       els.video.srcObject = stream;
+
+      await waitForVideoReady(els.video);
       await els.video.play();
+
+      const track = stream.getVideoTracks()[0];
+      const settings = track && track.getSettings ? track.getSettings() : {};
       setBadge(els.cameraBadge, 'Cámara activa', 'live');
       resizeOverlay();
       setWorkflow();
       requestAnimationFrame(loop);
-      toast('Cámara iniciada. Fija el celular antes de calibrar.');
+      toast(`Cámara iniciada (${usedAttempt}${settings.width ? ` · ${settings.width}×${settings.height}` : ''}).`, 3400);
     } catch (err) {
       console.error(err);
       setBadge(els.cameraBadge, 'Error cámara', 'bad');
-      toast('No pude abrir cámara. Revisa permisos y que estés en HTTPS/GitHub Pages.', 3200);
+      const msg = cameraErrorMessage(err);
+      setDecision('bad', 'CÁMARA BLOQUEADA', msg);
+      toast(msg, 5200);
     }
+  }
+
+  function waitForVideoReady(video) {
+    return new Promise((resolve, reject) => {
+      if (video.readyState >= 2 && video.videoWidth) return resolve();
+      const timeout = setTimeout(() => resolve(), 2500);
+      video.onloadedmetadata = () => { clearTimeout(timeout); resolve(); };
+      video.onerror = () => { clearTimeout(timeout); reject(new Error('No se pudo cargar el video de la cámara.')); };
+    });
+  }
+
+  function cameraErrorMessage(err) {
+    const name = err && err.name ? err.name : 'Error';
+    if (name === 'NotAllowedError' || name === 'PermissionDeniedError') {
+      return 'Permiso de cámara denegado. En el navegador, toca el candado/AA de la URL y permite Cámara para este sitio.';
+    }
+    if (name === 'NotFoundError' || name === 'DevicesNotFoundError') {
+      return 'No encontré cámara disponible. Cierra otras apps que usen cámara y vuelve a intentar.';
+    }
+    if (name === 'NotReadableError' || name === 'TrackStartError') {
+      return 'La cámara está ocupada por otra app o el navegador se trabó. Cierra cámara/WhatsApp/Instagram y recarga.';
+    }
+    if (name === 'OverconstrainedError' || name === 'ConstraintNotSatisfiedError') {
+      return 'La cámara no acepta la resolución solicitada. Esta versión ya intenta resoluciones menores; recarga e intenta otra vez.';
+    }
+    if (name === 'SecurityError' || name === 'InsecureContextError') {
+      return 'La cámara solo funciona en HTTPS. Abre la liga de GitHub Pages, no el archivo local ni la vista de código de GitHub.';
+    }
+    if (name === 'GetUserMediaMissing') {
+      return 'Este navegador no soporta acceso a cámara aquí. Usa Safari/Chrome actualizado desde la liga HTTPS de GitHub Pages.';
+    }
+    return `No pude abrir cámara (${name}). Recarga la página, revisa permisos y abre desde GitHub Pages HTTPS.`;
   }
 
   function grabFrame() {

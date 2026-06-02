@@ -1,4 +1,4 @@
-# Inspector de Parches Pro v4
+# Inspector de Parches Pro v4.1
 
 Webapp para auditar parches con celular desde GitHub Pages.
 
@@ -50,3 +50,9 @@ No subas el ZIP ni una carpeta contenedora.
 ## Notas de precisión
 
 La precisión depende más de la estación física que del código: cámara fija, buena luz y fondo controlado. Si el mismo parche medido cinco veces cambia más de 1 mm, revisa soporte, luz, calibración y contraste.
+
+
+## v4.1
+- Cámara con intentos automáticos: trasera alta, trasera media, cualquier cámara y frontal.
+- Mensajes claros si el permiso está bloqueado, la página no está en HTTPS o la cámara está ocupada.
+- Cache busting para GitHub Pages usando `?v=4.1`.
