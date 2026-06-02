@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Monitor PC | Inspector de Parches</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <h1>Monitor PC <span>Inspector v6</span></h1>
+      <p>Vista en vivo desde el celular.</p>
+    </div>
+    <span id="monitorStatus" class="badge idle">Esperando celular</span>
+  </header>
+
+  <main class="monitor-layout">
+    <section class="card">
+      <h2>Conexión</h2>
+      <p class="small">Copia este ID en el celular, sección “Monitor en PC”.</p>
+      <div class="copybox">
+        <strong id="myPeerId">Generando ID...</strong>
+        <button id="btnCopy">Copiar</button>
+      </div>
+      <p id="connText" class="small">Abre esta página primero en la PC. Luego conecta desde el celular.</p>
+    </section>
+
+    <section class="card monitor-video-card">
+      <video id="remoteVideo" autoplay playsinline muted></video>
+    </section>
+
+    <section class="card result-card">
+      <h2>Resultado actual</h2>
+      <div id="remoteDecision" class="decision neutral">SIN DATO</div>
+      <p id="remoteReason" class="reason">Esperando resultado del celular.</p>
+      <div class="metrics">
+        <div><span>Ancho</span><strong id="rWidth">--</strong></div>
+        <div><span>Alto</span><strong id="rHeight">--</strong></div>
+        <div><span>Texto offset</span><strong id="rText">--</strong></div>
+        <div><span>Total</span><strong id="rTotal">--</strong></div>
+      </div>
+    </section>
+  </main>
+
+  <div id="toast" class="toast"></div>
+  <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+  <script src="monitor.js"></script>
+</body>
+</html>

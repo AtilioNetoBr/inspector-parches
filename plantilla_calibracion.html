@@ -1,21 +1,15 @@
 <!doctype html>
 <html lang="es">
 <head>
-<meta charset="utf-8" />
-<title>Plantilla calibración 5x5 cm</title>
-<style>
-  @page { size: letter; margin: 12mm; }
-  body { font-family: Arial, sans-serif; color:#111; }
-  .card { width: 70mm; height: 70mm; border: 0.4mm solid #ccc; display:flex; align-items:center; justify-content:center; background:white; }
-  .square { width: 50mm; height: 50mm; background:#000; }
-  p { max-width: 150mm; font-size: 12pt; line-height: 1.4; }
-  .note { margin-top: 10mm; }
-</style>
+  <meta charset="utf-8" />
+  <title>Plantilla 5x5 cm</title>
+  <style>
+    @page{size:letter;margin:15mm}body{font-family:Arial,sans-serif} .card{width:70mm;height:70mm;border:0.35mm solid #111;display:grid;place-items:center;margin:20mm auto;background:white}.square{width:50mm;height:50mm;background:#000}.note{text-align:center;font-size:12pt}.cut{text-align:center;color:#555;font-size:10pt}
+  </style>
 </head>
 <body>
-  <h1>Plantilla de calibración 5 × 5 cm</h1>
-  <p>Imprime al 100%, sin “ajustar a página”. Verifica con regla que el cuadro negro mida exactamente 50 mm por 50 mm.</p>
+  <p class="note"><strong>Tarjeta de calibración</strong><br>Cuadro negro exacto: 50 mm × 50 mm</p>
   <div class="card"><div class="square"></div></div>
-  <p class="note">Recorta dejando borde blanco alrededor. Coloca la tarjeta plana sobre la misma mesa donde medirás los parches. Calibra y retira sin mover el celular.</p>
+  <p class="cut">Imprimir al 100%, sin ajustar a página. Verificar con regla antes de usar.</p>
 </body>
 </html>

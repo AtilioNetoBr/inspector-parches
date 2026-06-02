@@ -1,84 +1,704 @@
-/* Inspector de Parches Pro v5
-   Objetivo: estación de trabajo real con calibración robusta 5x5, referencia aprobada,
-   texto centrado y anti-duplicado en modo automático. */
-
+/* Inspector de Parches Pro v6
+   Flujo: cámara -> calibrar 5x5 -> tomar referencia -> auditar texto centrado.
+*/
 const $ = (id) => document.getElementById(id);
 const video = $('video');
-const videoWrap = $('videoWrap');
 const overlay = $('overlay');
 const ctx = overlay.getContext('2d');
 const capture = $('captureCanvas');
-const capCtx = capture.getContext('2d');
+const capCtx = capture.getContext('2d', { willReadFrequently: true });
+const patchPreview = $('patchPreview');
+const patchPreviewCtx = patchPreview.getContext('2d');
+const textPreview = $('textPreview');
+const textPreviewCtx = textPreview.getContext('2d');
 
 let stream = null;
 let autoMode = false;
-let autoLocked = false;
-let absentFrames = 0;
-let manualMode = null;
-let manualPoints = [];
-let lastDetectionBox = null;
+let pxPerMm = Number(localStorage.getItem('v6_pxPerMm') || 0);
+let reference = JSON.parse(localStorage.getItem('v6_reference') || 'null');
+let log = JSON.parse(localStorage.getItem('v6_log') || '[]');
+let lastAutoTs = 0;
+let measuredLocked = false;
+let missingFrames = 0;
+let latestResult = null;
+let peer = null;
+let dataConn = null;
+let mediaCall = null;
 
-let pxPerMm = Number(localStorage.getItem('ipp_v5_pxPerMm') || 0);
-let calibration = JSON.parse(localStorage.getItem('ipp_v5_calibration') || 'null');
-let reference = JSON.parse(localStorage.getItem('ipp_v5_reference') || 'null');
-let log = JSON.parse(localStorage.getItem('ipp_v5_log') || '[]');
+const AUTOCAPTURE_MS = 650;
+const SQUARE_MM = 50;
 
-function toast(msg, ms = 2400) {
+function toast(msg, ms = 2200) {
   const t = $('toast');
   t.textContent = msg;
   t.classList.add('show');
   setTimeout(() => t.classList.remove('show'), ms);
 }
 
-function setStatus(text, cls = 'idle') {
+function setBadge(text, cls = 'idle') {
   $('statusBadge').textContent = text;
   $('statusBadge').className = `badge ${cls}`;
 }
 
-function setCvStatus() {
-  if (window.cvReady && typeof cv !== 'undefined' && cv.Mat) {
-    $('cvBadge').textContent = 'Visión lista';
-    $('cvBadge').className = 'badge live';
-  } else {
-    $('cvBadge').textContent = 'Cargando visión...';
-    $('cvBadge').className = 'badge warn';
-  }
+function setStep(id, state) {
+  const el = $(id);
+  el.className = `step ${state}`;
 }
-window.addEventListener('opencv-ready', () => {
-  setCvStatus();
-  toast('Motor de visión listo');
-});
-setCvStatus();
-setInterval(setCvStatus, 1200);
 
-function cfg() {
-  const textStart = Math.max(35, Math.min(85, Number($('textStartPct').value || 60))) / 100;
-  const textEnd = Math.max(textStart + 0.05, Math.min(99, Number($('textEndPct').value || 94))) / 100;
+function setDecision(kind, title, reason) {
+  const d = $('decision');
+  d.textContent = title;
+  d.className = `decision ${kind}`;
+  $('reason').textContent = reason || '';
+}
+
+function getRules() {
   return {
-    lot: $('lotName').value.trim() || 'Sin lote',
-    squareMm: Number($('squareMm').value || 50),
+    textCenter: $('ruleTextCenter').checked,
+    size: $('ruleSize').checked,
+    area: $('ruleArea').checked,
+    angle: $('ruleAngle').checked,
+    tolText: Number($('tolText').value || 2),
     tolSizePct: Number($('tolSizePct').value || 3),
     tolAreaPct: Number($('tolAreaPct').value || 6),
-    tolTextMm: Number($('tolTextMm').value || 2),
-    textStart,
-    textEnd
+    tolAngle: Number($('tolAngle').value || 25)
   };
 }
 
-function updateStateUI() {
+function updateStatus() {
   $('scaleText').textContent = pxPerMm ? `${pxPerMm.toFixed(3)} px/mm` : 'No calibrada';
-  $('calibConfidence').textContent = calibration ? `${calibration.confidence}% (${calibration.method})` : '--';
-  $('referenceText').textContent = reference ? `${reference.widthMm.toFixed(1)}×${reference.heightMm.toFixed(1)} mm` : 'No tomada';
-  $('lockText').textContent = autoLocked ? 'Esperando retiro' : 'Libre';
+  $('refText').textContent = reference ? `${reference.widthMm.toFixed(1)}×${reference.heightMm.toFixed(1)} mm` : 'No tomada';
+  $('autoState').textContent = autoMode ? 'ON' : 'OFF';
+  if (!stream) $('modeText').textContent = 'Preparación';
+  else if (!pxPerMm) $('modeText').textContent = 'Calibrar 5×5';
+  else if (!reference) $('modeText').textContent = 'Tomar referencia';
+  else $('modeText').textContent = autoMode ? 'Auditando' : 'Listo';
+
+  setStep('stepCamera', stream ? 'ok' : 'pending');
+  setStep('stepCal', pxPerMm ? 'ok' : 'pending');
+  setStep('stepRef', reference ? 'ok' : 'pending');
+  setStep('stepAudit', reference && pxPerMm ? 'ok' : 'pending');
 }
-updateStateUI();
+
+function waitForOpenCv() {
+  return new Promise((resolve, reject) => {
+    const start = Date.now();
+    const timer = setInterval(() => {
+      if (window.cvReady && typeof cv !== 'undefined' && cv.Mat) {
+        clearInterval(timer);
+        resolve(true);
+      } else if (Date.now() - start > 15000) {
+        clearInterval(timer);
+        reject(new Error('OpenCV no cargó. Revisa internet.'));
+      }
+    }, 100);
+  });
+}
+
+async function startCamera() {
+  try {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      throw new Error('Este navegador no permite cámara.');
+    }
+    const attempts = [
+      { video: { facingMode: { exact: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: false },
+      { video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false },
+      { video: { width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false },
+      { video: true, audio: false }
+    ];
+    let err;
+    for (const constraints of attempts) {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia(constraints);
+        break;
+      } catch (e) { err = e; }
+    }
+    if (!stream) throw err || new Error('No se pudo abrir cámara.');
+    video.srcObject = stream;
+    await video.play();
+    resizeCanvas();
+    setBadge('Cámara activa', 'live');
+    $('guideText').textContent = pxPerMm ? 'Coloca parche' : 'Coloca cuadro 5×5';
+    updateStatus();
+    toast('Cámara iniciada');
+    requestAnimationFrame(loop);
+  } catch (e) {
+    console.error(e);
+    setBadge('Error cámara', 'bad');
+    toast('No abrió cámara. Usa HTTPS/GitHub Pages y permiso de cámara.', 4000);
+  }
+}
+
+function resizeCanvas() {
+  const rect = video.getBoundingClientRect();
+  const w = Math.max(1, Math.round(rect.width * devicePixelRatio));
+  const h = Math.max(1, Math.round(rect.height * devicePixelRatio));
+  overlay.width = w;
+  overlay.height = h;
+  ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
+}
+window.addEventListener('resize', resizeCanvas);
+
+function grabFrame() {
+  const vw = video.videoWidth;
+  const vh = video.videoHeight;
+  if (!vw || !vh) return false;
+  capture.width = vw;
+  capture.height = vh;
+  capCtx.drawImage(video, 0, 0, vw, vh);
+  return true;
+}
+
+function clearOverlay() {
+  ctx.clearRect(0, 0, overlay.clientWidth, overlay.clientHeight);
+}
+
+function drawBox(box, color = '#1fd18a', label = '') {
+  if (!box || !box.length) return;
+  const sx = overlay.clientWidth / capture.width;
+  const sy = overlay.clientHeight / capture.height;
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = color;
+  ctx.fillStyle = color;
+  ctx.font = '16px system-ui';
+  ctx.beginPath();
+  box.forEach((p, i) => {
+    const x = p.x * sx;
+    const y = p.y * sy;
+    if (i) ctx.lineTo(x, y); else ctx.moveTo(x, y);
+  });
+  ctx.closePath();
+  ctx.stroke();
+  if (label) ctx.fillText(label, box[0].x * sx + 6, box[0].y * sy + 20);
+}
+
+function matMeanGray(gray, rect) {
+  const x = Math.max(0, Math.min(gray.cols - 1, Math.round(rect.x)));
+  const y = Math.max(0, Math.min(gray.rows - 1, Math.round(rect.y)));
+  const w = Math.max(1, Math.min(gray.cols - x, Math.round(rect.width)));
+  const h = Math.max(1, Math.min(gray.rows - y, Math.round(rect.height)));
+  const roi = gray.roi(new cv.Rect(x, y, w, h));
+  const mean = cv.mean(roi)[0];
+  roi.delete();
+  return mean;
+}
+
+function rotatedRectPoints(rect) {
+  return cv.RotatedRect.points(rect).map(p => ({ x: p.x, y: p.y }));
+}
+
+function sortCorners(points) {
+  const cx = points.reduce((s, p) => s + p.x, 0) / points.length;
+  const cy = points.reduce((s, p) => s + p.y, 0) / points.length;
+  const sorted = [...points].sort((a, b) => Math.atan2(a.y - cy, a.x - cx) - Math.atan2(b.y - cy, b.x - cx));
+  const topLeftIndex = sorted.reduce((best, p, i) => (p.x + p.y < sorted[best].x + sorted[best].y ? i : best), 0);
+  return [...sorted.slice(topLeftIndex), ...sorted.slice(0, topLeftIndex)];
+}
+
+function distance(a, b) { return Math.hypot(a.x - b.x, a.y - b.y); }
+function avgSide(points) {
+  const p = sortCorners(points);
+  return (distance(p[0], p[1]) + distance(p[1], p[2]) + distance(p[2], p[3]) + distance(p[3], p[0])) / 4;
+}
+
+async function calibrateAutoSquare() {
+  try {
+    await waitForOpenCv();
+    if (!grabFrame()) return toast('Primero inicia cámara.');
+    const readings = [];
+    let bestBox = null;
+    for (let i = 0; i < 5; i++) {
+      if (i > 0) await new Promise(r => setTimeout(r, 110));
+      grabFrame();
+      const found = findBlackSquare();
+      if (found) {
+        readings.push(found.sidePx);
+        bestBox = found.box;
+      }
+    }
+    if (readings.length < 3) {
+      setDecision('bad', 'NO CALIBRADO', 'No detecté estable el cuadro 5×5. Usa manual 4 esquinas.');
+      return toast('No detecté suficiente estabilidad. Usa manual 4 esquinas.', 3500);
+    }
+    readings.sort((a, b) => a - b);
+    const median = readings[Math.floor(readings.length / 2)];
+    const spread = (readings[readings.length - 1] - readings[0]) / median;
+    if (spread > 0.08) {
+      setDecision('bad', 'NO CALIBRADO', `Lecturas inestables (${(spread * 100).toFixed(1)}%). Usa manual.`);
+      return toast('Lectura inestable. Fija mejor el cuadro o calibra manual.', 3500);
+    }
+    pxPerMm = median / SQUARE_MM;
+    localStorage.setItem('v6_pxPerMm', String(pxPerMm));
+    clearOverlay();
+    drawBox(bestBox, '#ffd166', '5×5 calibrado');
+    setDecision('ok', 'ESCALA LISTA', `Cuadro 5×5 detectado. Escala: ${pxPerMm.toFixed(3)} px/mm.`);
+    $('guideText').textContent = 'Retira cuadro y toma referencia';
+    updateStatus();
+    toast('Escala calibrada con cuadro 5×5');
+  } catch (e) {
+    console.error(e);
+    toast(e.message || 'Error calibrando.', 4000);
+  }
+}
+
+function findBlackSquare() {
+  let src = cv.imread(capture);
+  let gray = new cv.Mat();
+  let blur = new cv.Mat();
+  let best = null;
+  try {
+    cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+    cv.GaussianBlur(gray, blur, new cv.Size(5, 5), 0);
+    const minArea = capture.width * capture.height * 0.002;
+    const maxArea = capture.width * capture.height * 0.45;
+    const thresholds = [45, 60, 75, 90, 110, 130, 150];
+    for (const th of thresholds) {
+      let mask = new cv.Mat();
+      let contours = new cv.MatVector();
+      let hierarchy = new cv.Mat();
+      try {
+        cv.threshold(blur, mask, th, 255, cv.THRESH_BINARY_INV);
+        const k = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(5, 5));
+        cv.morphologyEx(mask, mask, cv.MORPH_CLOSE, k);
+        k.delete();
+        cv.findContours(mask, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+        for (let i = 0; i < contours.size(); i++) {
+          const cnt = contours.get(i);
+          const area = cv.contourArea(cnt);
+          if (area < minArea || area > maxArea) { cnt.delete(); continue; }
+          const rect = cv.minAreaRect(cnt);
+          const rw = Math.max(rect.size.width, rect.size.height);
+          const rh = Math.min(rect.size.width, rect.size.height);
+          if (!rw || !rh) { cnt.delete(); continue; }
+          const aspect = rw / rh;
+          if (aspect < 0.78 || aspect > 1.28) { cnt.delete(); continue; }
+          const fill = area / (rw * rh);
+          if (fill < 0.65) { cnt.delete(); continue; }
+          const br = cv.boundingRect(cnt);
+          const inside = matMeanGray(gray, br);
+          const pad = Math.round(Math.max(br.width, br.height) * 0.18);
+          const ringRect = {
+            x: br.x - pad,
+            y: br.y - pad,
+            width: br.width + pad * 2,
+            height: br.height + pad * 2
+          };
+          const outside = matMeanGray(gray, ringRect);
+          const contrast = outside - inside;
+          const score = contrast * 4 + fill * 80 - Math.abs(1 - aspect) * 120 + Math.min(area / 1000, 200);
+          if (inside < 120 && contrast > 25 && (!best || score > best.score)) {
+            best = { score, sidePx: (rw + rh) / 2, box: rotatedRectPoints(rect), area, inside, outside, contrast };
+          }
+          cnt.delete();
+        }
+      } finally {
+        mask.delete(); contours.delete(); hierarchy.delete();
+      }
+    }
+  } finally {
+    src.delete(); gray.delete(); blur.delete();
+  }
+  return best;
+}
+
+function calibrateManualSquare() {
+  if (!grabFrame()) return toast('Primero inicia cámara.');
+  clearOverlay();
+  const points = [];
+  setDecision('neutral', 'CALIBRACIÓN MANUAL', 'Toca las 4 esquinas del cuadro negro 5×5, en cualquier orden.');
+  toast('Toca las 4 esquinas del cuadro negro.', 3500);
+  const onClick = (ev) => {
+    const rect = overlay.getBoundingClientRect();
+    const xScreen = ev.clientX - rect.left;
+    const yScreen = ev.clientY - rect.top;
+    const x = xScreen * capture.width / rect.width;
+    const y = yScreen * capture.height / rect.height;
+    points.push({ x, y });
+    ctx.fillStyle = '#ffd166';
+    ctx.beginPath();
+    ctx.arc(xScreen, yScreen, 7, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillText(String(points.length), xScreen + 10, yScreen - 10);
+    if (points.length === 4) {
+      overlay.removeEventListener('click', onClick);
+      const sidePx = avgSide(points);
+      pxPerMm = sidePx / SQUARE_MM;
+      localStorage.setItem('v6_pxPerMm', String(pxPerMm));
+      clearOverlay();
+      drawBox(sortCorners(points), '#ffd166', '5×5 manual');
+      setDecision('ok', 'ESCALA LISTA', `Escala manual: ${pxPerMm.toFixed(3)} px/mm.`);
+      $('guideText').textContent = 'Retira cuadro y toma referencia';
+      updateStatus();
+      toast('Escala manual guardada. Ahora retira el cuadro.');
+    }
+  };
+  overlay.addEventListener('click', onClick);
+}
+
+function findPatchContour() {
+  let src = cv.imread(capture);
+  let gray = new cv.Mat();
+  let blur = new cv.Mat();
+  let edges = new cv.Mat();
+  let contours = new cv.MatVector();
+  let hierarchy = new cv.Mat();
+  let best = null;
+  try {
+    cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+    cv.GaussianBlur(gray, blur, new cv.Size(5, 5), 0);
+    cv.Canny(blur, edges, 35, 120);
+    const k = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(5, 5));
+    cv.morphologyEx(edges, edges, cv.MORPH_CLOSE, k);
+    k.delete();
+    cv.findContours(edges, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+    const minArea = capture.width * capture.height * 0.01;
+    const maxArea = capture.width * capture.height * 0.75;
+    for (let i = 0; i < contours.size(); i++) {
+      const cnt = contours.get(i);
+      const area = cv.contourArea(cnt);
+      if (area < minArea || area > maxArea) { cnt.delete(); continue; }
+      const rect = cv.minAreaRect(cnt);
+      const rw = Math.max(rect.size.width, rect.size.height);
+      const rh = Math.min(rect.size.width, rect.size.height);
+      if (!rw || !rh) { cnt.delete(); continue; }
+      const aspect = rw / rh;
+      if (aspect > 2.2 || aspect < 1.0) { cnt.delete(); continue; }
+      const fill = area / (rw * rh);
+      if (fill < 0.35) { cnt.delete(); continue; }
+      const score = area * fill;
+      if (!best || score > best.score) best = { score, contour: cnt, rect, area, box: rotatedRectPoints(rect) };
+      else cnt.delete();
+    }
+  } finally {
+    src.delete(); gray.delete(); blur.delete(); edges.delete(); contours.delete(); hierarchy.delete();
+  }
+  return best;
+}
+
+function warpPatch(box) {
+  const pts = sortCorners(box);
+  const sideA = distance(pts[0], pts[1]);
+  const sideB = distance(pts[1], pts[2]);
+  const sideC = distance(pts[2], pts[3]);
+  const sideD = distance(pts[3], pts[0]);
+  let w = Math.round(Math.max(sideA, sideC));
+  let h = Math.round(Math.max(sideB, sideD));
+  if (w < 10 || h < 10) return null;
+  let src = cv.imread(capture);
+  let dst = new cv.Mat();
+  let srcTri = cv.matFromArray(4, 1, cv.CV_32FC2, [
+    pts[0].x, pts[0].y,
+    pts[1].x, pts[1].y,
+    pts[2].x, pts[2].y,
+    pts[3].x, pts[3].y
+  ]);
+  let dstTri = cv.matFromArray(4, 1, cv.CV_32FC2, [0, 0, w, 0, w, h, 0, h]);
+  let M = cv.getPerspectiveTransform(srcTri, dstTri);
+  try {
+    cv.warpPerspective(src, dst, M, new cv.Size(w, h), cv.INTER_LINEAR, cv.BORDER_CONSTANT, new cv.Scalar());
+    // Mantener orientación retrato cuando aplique.
+    if (dst.cols > dst.rows) {
+      let rotated = new cv.Mat();
+      cv.rotate(dst, rotated, cv.ROTATE_90_CLOCKWISE);
+      dst.delete();
+      dst = rotated;
+    }
+    const oriented = orientByTextBottom(dst);
+    if (oriented !== dst) dst.delete();
+    return oriented;
+  } finally {
+    src.delete(); srcTri.delete(); dstTri.delete(); M.delete();
+  }
+}
+
+function darkScoreInBand(mat, fromY, toY) {
+  let gray = new cv.Mat();
+  let roi = null;
+  try {
+    cv.cvtColor(mat, gray, cv.COLOR_RGBA2GRAY);
+    const y = Math.max(0, Math.round(mat.rows * fromY));
+    const h = Math.max(1, Math.round(mat.rows * (toY - fromY)));
+    roi = gray.roi(new cv.Rect(0, y, mat.cols, Math.min(h, mat.rows - y)));
+    const data = roi.data;
+    let count = 0;
+    for (let i = 0; i < data.length; i++) if (data[i] < 115) count++;
+    return count / data.length;
+  } finally {
+    if (roi) roi.delete(); gray.delete();
+  }
+}
+
+function rotateMat(mat, code) {
+  const out = new cv.Mat();
+  cv.rotate(mat, out, code);
+  return out;
+}
+
+function orientByTextBottom(mat) {
+  // Compara dos orientaciones verticales: normal vs 180°. El texto debería estar abajo.
+  const scoreBottom = darkScoreInBand(mat, 0.58, 0.95) - darkScoreInBand(mat, 0.05, 0.42);
+  const rot = rotateMat(mat, cv.ROTATE_180);
+  const scoreRot = darkScoreInBand(rot, 0.58, 0.95) - darkScoreInBand(rot, 0.05, 0.42);
+  if (scoreRot > scoreBottom * 1.15) return rot;
+  rot.delete();
+  return mat;
+}
+
+function detectTextCenter(warped) {
+  let gray = new cv.Mat();
+  let roi = null;
+  let mask = new cv.Mat();
+  let contours = new cv.MatVector();
+  let hierarchy = new cv.Mat();
+  try {
+    cv.cvtColor(warped, gray, cv.COLOR_RGBA2GRAY);
+    const y = Math.round(warped.rows * 0.52);
+    const h = Math.max(1, warped.rows - y - Math.round(warped.rows * 0.04));
+    roi = gray.roi(new cv.Rect(0, y, warped.cols, h));
+
+    // Umbral adaptativo invertido: texto oscuro sobre parche claro.
+    cv.adaptiveThreshold(roi, mask, 255, cv.ADAPTIVE_THRESH_MEAN_C, cv.THRESH_BINARY_INV, 31, 12);
+    let k = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(5, 3));
+    cv.morphologyEx(mask, mask, cv.MORPH_OPEN, k);
+    k.delete();
+    k = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(13, 5));
+    cv.morphologyEx(mask, mask, cv.MORPH_CLOSE, k);
+    k.delete();
+    cv.findContours(mask, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+
+    let boxes = [];
+    const minArea = Math.max(12, warped.cols * warped.rows * 0.0003);
+    for (let i = 0; i < contours.size(); i++) {
+      const cnt = contours.get(i);
+      const area = cv.contourArea(cnt);
+      const r = cv.boundingRect(cnt);
+      cnt.delete();
+      if (area < minArea) continue;
+      if (r.width < warped.cols * 0.025 || r.height < warped.rows * 0.015) continue;
+      if (r.width > warped.cols * 0.95 || r.height > warped.rows * 0.40) continue;
+      // Prioriza lo que está en la zona media-baja del ROI; evita mugre de orillas.
+      if (r.y < h * 0.06 || r.y > h * 0.88) continue;
+      boxes.push(r);
+    }
+    if (!boxes.length) return { found: false, offsetMm: null, confidence: 0, box: null };
+
+    // Agrupa candidatos cercanos al renglón dominante.
+    const centerYs = boxes.map(b => b.y + b.height / 2).sort((a, b) => a - b);
+    const medianY = centerYs[Math.floor(centerYs.length / 2)];
+    boxes = boxes.filter(b => Math.abs((b.y + b.height / 2) - medianY) < h * 0.22);
+    const x1 = Math.min(...boxes.map(b => b.x));
+    const y1 = Math.min(...boxes.map(b => b.y));
+    const x2 = Math.max(...boxes.map(b => b.x + b.width));
+    const y2 = Math.max(...boxes.map(b => b.y + b.height));
+    const textCx = (x1 + x2) / 2;
+    const patchCx = warped.cols / 2;
+    const offsetPx = textCx - patchCx;
+    const offsetMm = pxPerMm ? offsetPx / pxPerMm : null;
+    const widthRatio = (x2 - x1) / warped.cols;
+    const confidence = Math.max(0, Math.min(100, Math.round((widthRatio * 170) + Math.min(boxes.length, 5) * 8)));
+
+    drawPreview(warped, { x: x1, y: y1 + y, width: x2 - x1, height: y2 - y1 }, textCx, patchCx);
+    return { found: true, offsetMm, confidence, box: { x: x1, y: y1 + y, width: x2 - x1, height: y2 - y1 } };
+  } finally {
+    gray.delete(); if (roi) roi.delete(); mask.delete(); contours.delete(); hierarchy.delete();
+  }
+}
+
+function drawPreview(mat, textBox, textCx, patchCx) {
+  cv.imshow(patchPreview, mat);
+  patchPreviewCtx.lineWidth = 3;
+  patchPreviewCtx.strokeStyle = '#58a6ff';
+  patchPreviewCtx.beginPath();
+  patchPreviewCtx.moveTo(patchCx, 0);
+  patchPreviewCtx.lineTo(patchCx, patchPreview.height);
+  patchPreviewCtx.stroke();
+  if (textBox) {
+    patchPreviewCtx.strokeStyle = '#1fd18a';
+    patchPreviewCtx.strokeRect(textBox.x, textBox.y, textBox.width, textBox.height);
+    patchPreviewCtx.strokeStyle = '#ffd166';
+    patchPreviewCtx.beginPath();
+    patchPreviewCtx.moveTo(textCx, 0);
+    patchPreviewCtx.lineTo(textCx, patchPreview.height);
+    patchPreviewCtx.stroke();
+  }
+
+  textPreview.width = Math.max(1, Math.round(mat.cols));
+  textPreview.height = Math.max(1, Math.round(mat.rows * 0.48));
+  const tmp = new cv.Mat();
+  const y = Math.round(mat.rows * 0.52);
+  const roi = mat.roi(new cv.Rect(0, y, mat.cols, mat.rows - y));
+  cv.imshow(textPreview, roi);
+  roi.delete(); tmp.delete();
+  if (textBox) {
+    textPreviewCtx.strokeStyle = '#1fd18a';
+    textPreviewCtx.lineWidth = 3;
+    textPreviewCtx.strokeRect(textBox.x, Math.max(0, textBox.y - y), textBox.width, textBox.height);
+    textPreviewCtx.strokeStyle = '#58a6ff';
+    textPreviewCtx.beginPath();
+    textPreviewCtx.moveTo(patchCx, 0);
+    textPreviewCtx.lineTo(patchCx, textPreview.height);
+    textPreviewCtx.stroke();
+    textPreviewCtx.strokeStyle = '#ffd166';
+    textPreviewCtx.beginPath();
+    textPreviewCtx.moveTo(textCx, 0);
+    textPreviewCtx.lineTo(textCx, textPreview.height);
+    textPreviewCtx.stroke();
+  }
+}
+
+function analyzeFrame(record = false) {
+  if (!window.cvReady || typeof cv === 'undefined') {
+    toast('OpenCV todavía está cargando. Espera unos segundos.');
+    return null;
+  }
+  if (!pxPerMm) {
+    setDecision('bad', 'FALTA ESCALA', 'Calibra primero con el cuadro negro 5×5.');
+    return null;
+  }
+  if (!grabFrame()) return null;
+  const patch = findPatchContour();
+  clearOverlay();
+  if (!patch) {
+    setDecision('neutral', 'SIN PARCHE', 'No encuentro un contorno claro. Usa fondo oscuro mate y parche completo.');
+    latestResult = null;
+    missingFrames++;
+    if (missingFrames >= 3) measuredLocked = false;
+    return null;
+  }
+  missingFrames = 0;
+  drawBox(patch.box, '#58a6ff', 'parche');
+
+  const rect = patch.rect;
+  const wPx = Math.min(rect.size.width, rect.size.height);
+  const hPx = Math.max(rect.size.width, rect.size.height);
+  const widthMm = wPx / pxPerMm;
+  const heightMm = hPx / pxPerMm;
+  const areaMm = patch.area / (pxPerMm * pxPerMm);
+  const angle = normalizeAngle(rect.angle, rect.size.width, rect.size.height);
+  const warped = warpPatch(patch.box);
+  const text = warped ? detectTextCenter(warped) : { found: false, offsetMm: null, confidence: 0 };
+  if (warped) warped.delete();
+
+  const rules = getRules();
+  const checks = [];
+  let pass = true;
+
+  if (rules.textCenter) {
+    if (!text.found) {
+      pass = false;
+      checks.push('Texto no detectado');
+    } else if (Math.abs(text.offsetMm) > rules.tolText) {
+      pass = false;
+      checks.push(`Texto descentrado ${text.offsetMm > 0 ? 'derecha' : 'izquierda'} ${Math.abs(text.offsetMm).toFixed(1)} mm`);
+    } else {
+      checks.push(`Texto centrado OK (${text.offsetMm.toFixed(1)} mm)`);
+    }
+  }
+
+  if (reference && rules.size) {
+    const dw = pctDiff(widthMm, reference.widthMm);
+    const dh = pctDiff(heightMm, reference.heightMm);
+    if (Math.abs(dw) > rules.tolSizePct || Math.abs(dh) > rules.tolSizePct) {
+      pass = false;
+      checks.push(`Medida fuera: ancho ${dw.toFixed(1)}%, alto ${dh.toFixed(1)}%`);
+    } else checks.push('Medida OK');
+  }
+
+  if (reference && rules.area) {
+    const da = pctDiff(areaMm, reference.areaMm);
+    if (Math.abs(da) > rules.tolAreaPct) {
+      pass = false;
+      checks.push(`Área fuera ${da.toFixed(1)}%`);
+    } else checks.push('Área OK');
+  }
+
+  if (rules.angle) {
+    if (Math.abs(angle) > rules.tolAngle) {
+      pass = false;
+      checks.push(`Giro excesivo ${angle.toFixed(1)}°`);
+    } else checks.push('Giro OK');
+  }
+
+  if (!rules.textCenter && !rules.size && !rules.area && !rules.angle) {
+    checks.push('Sin criterios activos: solo lectura');
+  }
+
+  const result = {
+    time: new Date().toLocaleString(),
+    pass,
+    widthMm,
+    heightMm,
+    areaMm,
+    angle,
+    textOffsetMm: text.offsetMm,
+    textFound: text.found,
+    confidence: text.confidence,
+    reason: checks.join('; ')
+  };
+  latestResult = result;
+  updateResultUI(result);
+  if (record) addLog(result);
+  sendResultToPc(result);
+  return result;
+}
+
+function normalizeAngle(angle, w, h) {
+  let a = angle;
+  if (w < h) a = angle + 90;
+  if (a > 45) a -= 90;
+  if (a < -45) a += 90;
+  return a;
+}
+
+function pctDiff(value, base) { return ((value - base) / base) * 100; }
+
+function updateResultUI(res) {
+  setDecision(res.pass ? 'ok' : 'bad', res.pass ? 'APROBADO' : 'RECHAZADO', res.reason);
+  $('mWidth').textContent = `${res.widthMm.toFixed(1)} mm`;
+  $('mHeight').textContent = `${res.heightMm.toFixed(1)} mm`;
+  $('mArea').textContent = `${res.areaMm.toFixed(0)} mm²`;
+  $('mAngle').textContent = `${res.angle.toFixed(1)}°`;
+  $('mText').textContent = res.textFound ? `${res.textOffsetMm.toFixed(1)} mm` : 'No detectado';
+  $('mConfidence').textContent = `${res.confidence}%`;
+}
+
+function takeReference() {
+  if (!pxPerMm) return toast('Primero calibra con el cuadro 5×5.');
+  const res = analyzeFrame(false);
+  if (!res) return;
+  reference = {
+    widthMm: res.widthMm,
+    heightMm: res.heightMm,
+    areaMm: res.areaMm,
+    textOffsetMm: res.textFound ? res.textOffsetMm : 0,
+    createdAt: new Date().toISOString()
+  };
+  localStorage.setItem('v6_reference', JSON.stringify(reference));
+  setDecision('ok', 'REFERENCIA GUARDADA', `Referencia: ${reference.widthMm.toFixed(1)}×${reference.heightMm.toFixed(1)} mm. Texto: ${reference.textOffsetMm.toFixed(1)} mm.`);
+  $('guideText').textContent = 'Activa Auto o mide ahora';
+  updateStatus();
+  toast('Referencia aprobada guardada.');
+}
+
+function addLog(res) {
+  log.unshift({
+    time: res.time,
+    result: res.pass ? 'APROBADO' : 'RECHAZADO',
+    width: res.widthMm.toFixed(1),
+    height: res.heightMm.toFixed(1),
+    area: res.areaMm.toFixed(0),
+    text: res.textFound ? res.textOffsetMm.toFixed(1) : 'ND',
+    reason: res.reason
+  });
+  log = log.slice(0, 1000);
+  localStorage.setItem('v6_log', JSON.stringify(log));
+  renderLog();
+}
 
 function renderLog() {
   $('logBody').innerHTML = log.map(r => `
     <tr>
-      <td>${escapeHtml(r.time)}</td><td>${escapeHtml(r.lot)}</td><td>${escapeHtml(r.result)}</td>
-      <td>${escapeHtml(r.width)}</td><td>${escapeHtml(r.height)}</td><td>${escapeHtml(r.area)}</td>
-      <td>${escapeHtml(r.textOffset)}</td><td>${escapeHtml(r.reason)}</td>
+      <td>${escapeHtml(r.time)}</td><td>${escapeHtml(r.result)}</td><td>${escapeHtml(r.width)}</td><td>${escapeHtml(r.height)}</td><td>${escapeHtml(r.area)}</td><td>${escapeHtml(r.text)}</td><td>${escapeHtml(r.reason)}</td>
     </tr>`).join('');
   const ok = log.filter(r => r.result === 'APROBADO').length;
   const bad = log.length - ok;
@@ -87,739 +707,130 @@ function renderLog() {
   $('totalCount').textContent = log.length;
   $('okPct').textContent = log.length ? `${((ok / log.length) * 100).toFixed(1)}%` : '0%';
 }
-renderLog();
 
-function escapeHtml(value) {
-  return String(value ?? '').replace(/[&<>'"]/g, s => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[s]));
+function escapeHtml(v) {
+  return String(v ?? '').replace(/[&<>'"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[c]));
 }
 
-async function startCamera() {
-  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-    setStatus('Sin soporte cámara', 'bad');
-    toast('Este navegador no permite cámara. Usa Safari/Chrome desde HTTPS.');
-    return;
-  }
-
-  if (stream) stopCamera();
-
-  const attempts = [
-    { video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: false },
-    { video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false },
-    { video: { facingMode: 'environment' }, audio: false },
-    { video: true, audio: false }
-  ];
-
-  let lastErr = null;
-  for (const constraints of attempts) {
-    try {
-      stream = await navigator.mediaDevices.getUserMedia(constraints);
-      video.srcObject = stream;
-      await video.play();
-      resizeOverlay();
-      setStatus('Cámara activa', 'live');
-      toast('Cámara iniciada');
-      requestAnimationFrame(loop);
-      return;
-    } catch (err) {
-      lastErr = err;
-    }
-  }
-
-  setStatus('Error cámara', 'bad');
-  let msg = 'No se pudo abrir cámara.';
-  if (lastErr && lastErr.name === 'NotAllowedError') msg = 'Permiso de cámara bloqueado. Permite cámara en el navegador.';
-  if (location.protocol !== 'https:' && location.hostname !== 'localhost') msg = 'La cámara necesita HTTPS. Abre desde GitHub Pages.';
-  toast(msg, 4200);
-  console.error(lastErr);
-}
-
-function stopCamera() {
-  if (stream) stream.getTracks().forEach(t => t.stop());
-  stream = null;
-}
-
-function resizeOverlay() {
-  const rect = videoWrap.getBoundingClientRect();
-  const dpr = window.devicePixelRatio || 1;
-  overlay.width = Math.round(rect.width * dpr);
-  overlay.height = Math.round(rect.height * dpr);
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  clearOverlay();
-}
-window.addEventListener('resize', resizeOverlay);
-
-function clearOverlay() {
-  ctx.clearRect(0, 0, overlay.clientWidth, overlay.clientHeight);
-}
-
-function getVideoRect() {
-  const cw = overlay.clientWidth;
-  const ch = overlay.clientHeight;
-  const vw = video.videoWidth || 1;
-  const vh = video.videoHeight || 1;
-  const cr = cw / ch;
-  const vr = vw / vh;
-  let w, h, x, y;
-  if (vr > cr) {
-    w = cw;
-    h = cw / vr;
-    x = 0;
-    y = (ch - h) / 2;
-  } else {
-    h = ch;
-    w = ch * vr;
-    x = (cw - w) / 2;
-    y = 0;
-  }
-  return { x, y, w, h, vw, vh };
-}
-
-function imageToView(pt) {
-  const r = getVideoRect();
-  return { x: r.x + (pt.x / r.vw) * r.w, y: r.y + (pt.y / r.vh) * r.h };
-}
-
-function viewToImage(clientX, clientY) {
-  const b = overlay.getBoundingClientRect();
-  const x = clientX - b.left;
-  const y = clientY - b.top;
-  const r = getVideoRect();
-  return { x: ((x - r.x) / r.w) * r.vw, y: ((y - r.y) / r.h) * r.vh };
-}
-
-function grabFrame() {
-  if (!video.videoWidth || !video.videoHeight) return false;
-  capture.width = video.videoWidth;
-  capture.height = video.videoHeight;
-  capCtx.drawImage(video, 0, 0, capture.width, capture.height);
-  return true;
-}
-
-function requireVision() {
-  if (!window.cvReady || typeof cv === 'undefined' || !cv.Mat) {
-    toast('OpenCV todavía no está listo. Espera unos segundos y vuelve a intentar.');
-    return false;
-  }
-  if (!grabFrame()) {
-    toast('La cámara todavía no entrega imagen.');
-    return false;
-  }
-  return true;
-}
-
-function withSrcMat(fn) {
-  if (!requireVision()) return null;
-  const src = cv.imread(capture);
-  try { return fn(src); }
-  finally { src.delete(); }
-}
-
-function drawBox(points, color = '#1fd18a', label = '') {
-  if (!points || !points.length) return;
-  ctx.lineWidth = 3;
-  ctx.strokeStyle = color;
-  ctx.fillStyle = color;
-  ctx.font = '16px system-ui';
-  ctx.beginPath();
-  points.forEach((p, i) => {
-    const v = imageToView(p);
-    if (i) ctx.lineTo(v.x, v.y); else ctx.moveTo(v.x, v.y);
-  });
-  ctx.closePath();
-  ctx.stroke();
-  if (label) {
-    const first = imageToView(points[0]);
-    ctx.fillText(label, first.x + 8, first.y - 8);
-  }
-}
-
-function drawPoint(pt, index, color = '#ffd166') {
-  const v = imageToView(pt);
-  ctx.fillStyle = color;
-  ctx.beginPath();
-  ctx.arc(v.x, v.y, 7, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.font = '15px system-ui';
-  ctx.fillText(String(index), v.x + 9, v.y - 9);
-}
-
-function matDownscale(src, maxSide = 960) {
-  const maxDim = Math.max(src.cols, src.rows);
-  if (maxDim <= maxSide) return { mat: src.clone(), scale: 1 };
-  const scale = maxSide / maxDim;
-  const dst = new cv.Mat();
-  cv.resize(src, dst, new cv.Size(Math.round(src.cols * scale), Math.round(src.rows * scale)), 0, 0, cv.INTER_AREA);
-  return { mat: dst, scale };
-}
-
-function detectBlackSquare(src) {
-  const ds = matDownscale(src, 960);
-  const small = ds.mat;
-  const scale = ds.scale;
-  const gray = new cv.Mat();
-  const blur = new cv.Mat();
-  const masks = [];
-  let best = null;
-
-  try {
-    cv.cvtColor(small, gray, cv.COLOR_RGBA2GRAY);
-    cv.GaussianBlur(gray, blur, new cv.Size(5, 5), 0);
-
-    // Umbrales fijos: cubren luz fuerte, luz media y negro no tan negro.
-    [45, 60, 75, 90, 110, 130, 150, 170].forEach(t => {
-      const m = new cv.Mat();
-      cv.threshold(blur, m, t, 255, cv.THRESH_BINARY_INV);
-      masks.push(m);
-    });
-
-    // Otsu automático.
-    const otsu = new cv.Mat();
-    cv.threshold(blur, otsu, 0, 255, cv.THRESH_BINARY_INV + cv.THRESH_OTSU);
-    masks.push(otsu);
-
-    // Adaptive para sombras.
-    const adaptive = new cv.Mat();
-    cv.adaptiveThreshold(blur, adaptive, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 51, 5);
-    masks.push(adaptive);
-
-    for (const mask of masks) {
-      const candidate = evaluateSquareMask(mask, gray, scale);
-      if (candidate && (!best || candidate.score > best.score)) best = candidate;
-    }
-  } finally {
-    masks.forEach(m => m.delete());
-    gray.delete();
-    blur.delete();
-    small.delete();
-  }
-
-  return best;
-}
-
-function evaluateSquareMask(mask, gray, scale) {
-  const work = new cv.Mat();
-  const contours = new cv.MatVector();
-  const hierarchy = new cv.Mat();
-  const kernelOpen = cv.Mat.ones(3, 3, cv.CV_8U);
-  const kernelClose = cv.Mat.ones(7, 7, cv.CV_8U);
-  let best = null;
-  try {
-    cv.morphologyEx(mask, work, cv.MORPH_OPEN, kernelOpen);
-    cv.morphologyEx(work, work, cv.MORPH_CLOSE, kernelClose);
-    cv.findContours(work, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
-
-    const imgArea = gray.cols * gray.rows;
-    for (let i = 0; i < contours.size(); i++) {
-      const c = contours.get(i);
-      const area = cv.contourArea(c);
-      if (area < imgArea * 0.003 || area > imgArea * 0.55) { c.delete(); continue; }
-
-      const rect = cv.minAreaRect(c);
-      const rw = Math.max(rect.size.width, 1);
-      const rh = Math.max(rect.size.height, 1);
-      const longSide = Math.max(rw, rh);
-      const shortSide = Math.min(rw, rh);
-      const ratio = longSide / shortSide;
-      const rectArea = rw * rh;
-      const rectangularity = area / rectArea;
-      if (ratio > 1.38 || rectangularity < 0.52 || rectangularity > 1.18) { c.delete(); continue; }
-
-      const br = cv.boundingRect(c);
-      const pad = Math.round(Math.max(br.width, br.height) * 0.18);
-      const ex = Math.max(0, br.x - pad);
-      const ey = Math.max(0, br.y - pad);
-      const ew = Math.min(gray.cols - ex, br.width + pad * 2);
-      const eh = Math.min(gray.rows - ey, br.height + pad * 2);
-      if (ew <= br.width || eh <= br.height) { c.delete(); continue; }
-
-      const roiInner = gray.roi(new cv.Rect(br.x, br.y, br.width, br.height));
-      const roiOuter = gray.roi(new cv.Rect(ex, ey, ew, eh));
-      const innerMean = cv.mean(roiInner)[0];
-      const outerMean = cv.mean(roiOuter)[0];
-      roiInner.delete();
-      roiOuter.delete();
-
-      // Para cuadro negro sobre tarjeta blanca, la zona externa debe ser más clara.
-      const contrast = outerMean - innerMean;
-      if (innerMean > 175 || contrast < 18) { c.delete(); continue; }
-
-      const ptsSmall = cv.RotatedRect.points(rect).map(p => ({ x: p.x / scale, y: p.y / scale }));
-      const ordered = orderPoints(ptsSmall);
-      const sides = sideLengths(ordered);
-      const sideAvg = avg(sides);
-      const sideRatio = Math.max(...sides) / Math.max(1, Math.min(...sides));
-      if (sideRatio > 1.45) { c.delete(); continue; }
-
-      const ratioScore = 1 / ratio;
-      const rectScore = Math.min(1, rectangularity);
-      const contrastScore = Math.min(1, Math.max(0, contrast) / 90);
-      const sizeScore = Math.min(1, area / (imgArea * 0.04));
-      const score = (ratioScore * 35) + (rectScore * 25) + (contrastScore * 30) + (sizeScore * 10);
-
-      const candidate = {
-        kind: 'square',
-        box: ordered,
-        sidePx: sideAvg,
-        sidesPx: sides,
-        confidence: Math.round(Math.min(99, score)),
-        score,
-        contrast: Math.round(contrast),
-        innerMean: Math.round(innerMean),
-        outerMean: Math.round(outerMean)
-      };
-      if (!best || candidate.score > best.score) best = candidate;
-      c.delete();
-    }
-  } finally {
-    work.delete();
-    contours.delete();
-    hierarchy.delete();
-    kernelOpen.delete();
-    kernelClose.delete();
-  }
-  return best;
-}
-
-async function calibrateAutoSquare() {
-  if (!stream) { toast('Primero inicia la cámara.'); return; }
-  if (!window.cvReady) { toast('Espera a que diga Visión lista.'); return; }
-
-  $('operatorMessage').textContent = 'Calibrando: deja el cuadro negro 5×5 completo y quieto sobre la mesa.';
-  clearOverlay();
-  const detections = [];
-
-  for (let i = 0; i < 10; i++) {
-    const det = withSrcMat(src => detectBlackSquare(src));
-    if (det) {
-      detections.push(det);
-      clearOverlay();
-      drawBox(det.box, '#ffd166', `Cuadro ${i + 1}/10`);
-    }
-    await wait(120);
-  }
-
-  if (detections.length < 4) {
-    $('operatorMessage').textContent = 'No se detectó el cuadro con suficiente confianza. Usa “Calibrar manual 4 esquinas”.';
-    toast('No tengo suficientes lecturas del cuadro. Pruébalo manual con 4 esquinas.', 4200);
-    return;
-  }
-
-  const sides = detections.map(d => d.sidePx).sort((a, b) => a - b);
-  const medianSide = sides[Math.floor(sides.length / 2)];
-  const sd = stddev(sides);
-  const stabilityPct = (sd / medianSide) * 100;
-  const confidence = Math.max(50, Math.min(99, Math.round(100 - stabilityPct * 12)));
-  const squareMm = cfg().squareMm;
-
-  pxPerMm = medianSide / squareMm;
-  calibration = {
-    method: 'auto 5x5',
-    pxPerMm,
-    confidence,
-    sidePx: medianSide,
-    stabilityPct: Number(stabilityPct.toFixed(2)),
-    at: new Date().toISOString()
-  };
-  localStorage.setItem('ipp_v5_pxPerMm', String(pxPerMm));
-  localStorage.setItem('ipp_v5_calibration', JSON.stringify(calibration));
-  updateStateUI();
-
-  const best = detections.sort((a, b) => b.score - a.score)[0];
-  clearOverlay();
-  drawBox(best.box, '#1fd18a', 'Calibrado 5×5');
-  $('operatorMessage').textContent = `Escala guardada: ${pxPerMm.toFixed(3)} px/mm. Estabilidad: ${stabilityPct.toFixed(2)}%. Retira el cuadro SIN mover el celular.`;
-  toast('Calibración guardada. Retira el cuadro sin mover el celular.', 4200);
-}
-
-function startManualCalibration() {
-  if (!stream) { toast('Primero inicia la cámara.'); return; }
-  if (!grabFrame()) { toast('No hay imagen de cámara.'); return; }
-  manualMode = 'calib4';
-  manualPoints = [];
-  clearOverlay();
-  $('operatorMessage').textContent = 'Toca las 4 esquinas del cuadro negro 5×5. No importa el orden.';
-  toast('Toca las 4 esquinas del cuadro negro.', 3200);
-}
-
-overlay.addEventListener('click', (ev) => {
-  if (manualMode !== 'calib4') return;
-  const pt = viewToImage(ev.clientX, ev.clientY);
-  if (pt.x < 0 || pt.y < 0 || pt.x > video.videoWidth || pt.y > video.videoHeight) return;
-  manualPoints.push(pt);
-  drawPoint(pt, manualPoints.length);
-  $('operatorMessage').textContent = `Esquina marcada ${manualPoints.length}/4.`;
-  if (manualPoints.length === 4) finishManualCalibration();
-});
-
-function finishManualCalibration() {
-  const ordered = orderPoints(manualPoints);
-  const sides = sideLengths(ordered);
-  const sideAvg = avg(sides);
-  const sideRatio = Math.max(...sides) / Math.max(1, Math.min(...sides));
-  const squareMm = cfg().squareMm;
-  pxPerMm = sideAvg / squareMm;
-
-  const confidence = Math.max(55, Math.min(98, Math.round(100 - Math.abs(sideRatio - 1) * 120)));
-  calibration = {
-    method: 'manual 4 esquinas',
-    pxPerMm,
-    confidence,
-    sidePx: sideAvg,
-    sideRatio: Number(sideRatio.toFixed(3)),
-    at: new Date().toISOString()
-  };
-  localStorage.setItem('ipp_v5_pxPerMm', String(pxPerMm));
-  localStorage.setItem('ipp_v5_calibration', JSON.stringify(calibration));
-  manualMode = null;
-  manualPoints = [];
-  updateStateUI();
-  clearOverlay();
-  drawBox(ordered, '#1fd18a', 'Calibrado manual');
-  $('operatorMessage').textContent = `Escala guardada: ${pxPerMm.toFixed(3)} px/mm. Retira el cuadro SIN mover el celular.`;
-  toast('Calibración manual guardada.', 3200);
-}
-
-function detectPatch(src) {
-  const ds = matDownscale(src, 1100);
-  const small = ds.mat;
-  const scale = ds.scale;
-  const gray = new cv.Mat();
-  const blur = new cv.Mat();
-  const edges = new cv.Mat();
-  const work = new cv.Mat();
-  const contours = new cv.MatVector();
-  const hierarchy = new cv.Mat();
-  const kernel = cv.Mat.ones(7, 7, cv.CV_8U);
-  let best = null;
-
-  try {
-    cv.cvtColor(small, gray, cv.COLOR_RGBA2GRAY);
-    cv.GaussianBlur(gray, blur, new cv.Size(5, 5), 0);
-    cv.Canny(blur, edges, 45, 140);
-    cv.morphologyEx(edges, work, cv.MORPH_CLOSE, kernel);
-    cv.findContours(work, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
-
-    const imgArea = gray.cols * gray.rows;
-    for (let i = 0; i < contours.size(); i++) {
-      const c = contours.get(i);
-      const area = cv.contourArea(c);
-      if (area < imgArea * 0.008 || area > imgArea * 0.75) { c.delete(); continue; }
-
-      const rect = cv.minAreaRect(c);
-      const rw = Math.max(rect.size.width, 1);
-      const rh = Math.max(rect.size.height, 1);
-      const rectArea = rw * rh;
-      if (rectArea < imgArea * 0.01) { c.delete(); continue; }
-
-      const pts = cv.RotatedRect.points(rect).map(p => ({ x: p.x / scale, y: p.y / scale }));
-      const ordered = orderPoints(pts);
-      const sides = sideLengths(ordered);
-      let widthPx = Math.min(avg([sides[0], sides[2]]), avg([sides[1], sides[3]]));
-      let heightPx = Math.max(avg([sides[0], sides[2]]), avg([sides[1], sides[3]]));
-      const score = area + Math.min(rectArea, imgArea * 0.4) * 0.2;
-
-      const candidate = { box: ordered, areaPx: area / (scale * scale), widthPx: widthPx / scale, heightPx: heightPx / scale, score };
-      if (!best || candidate.score > best.score) best = candidate;
-      c.delete();
-    }
-  } finally {
-    small.delete(); gray.delete(); blur.delete(); edges.delete(); work.delete(); contours.delete(); hierarchy.delete(); kernel.delete();
-  }
-
-  return best;
-}
-
-function measureCurrentPatch() {
-  return withSrcMat(src => {
-    const det = detectPatch(src);
-    if (!det) return { error: 'No encuentro el parche. Usa fondo mate contrastante y evita sombras.' };
-    const text = detectTextCenter(src, det.box);
-    const widthMm = det.widthPx / pxPerMm;
-    const heightMm = det.heightPx / pxPerMm;
-    const areaMm = det.areaPx / (pxPerMm * pxPerMm);
-    return { det, widthMm, heightMm, areaMm, text };
-  });
-}
-
-function takeReference() {
-  if (!pxPerMm) { toast('Primero calibra con el cuadro 5×5.'); return; }
-  const m = measureCurrentPatch();
-  if (!m || m.error) { toast(m?.error || 'No pude medir la referencia.', 4200); return; }
-  reference = {
-    widthMm: m.widthMm,
-    heightMm: m.heightMm,
-    areaMm: m.areaMm,
-    textOffsetMm: m.text && Number.isFinite(m.text.offsetMm) ? m.text.offsetMm : null,
-    at: new Date().toISOString()
-  };
-  localStorage.setItem('ipp_v5_reference', JSON.stringify(reference));
-  updateStateUI();
-  clearOverlay();
-  drawBox(m.det.box, '#1fd18a', 'Referencia');
-  $('operatorMessage').textContent = `Referencia tomada: ${reference.widthMm.toFixed(1)}×${reference.heightMm.toFixed(1)} mm. Ya puedes auditar.`;
-  toast('Referencia aprobada guardada.', 3200);
-}
-
-function auditCurrentPatch(record = true) {
-  if (!pxPerMm) { toast('Primero calibra con el cuadro 5×5.'); return null; }
-  if (!reference) { toast('Primero toma una referencia aprobada.'); return null; }
-
-  const m = measureCurrentPatch();
-  if (!m || m.error) {
-    setDecision(null, m?.error || 'No se pudo medir.');
-    return null;
-  }
-
-  const c = cfg();
-  const reasons = [];
-  const widthDiffPct = ((m.widthMm - reference.widthMm) / reference.widthMm) * 100;
-  const heightDiffPct = ((m.heightMm - reference.heightMm) / reference.heightMm) * 100;
-  const areaDiffPct = ((m.areaMm - reference.areaMm) / reference.areaMm) * 100;
-
-  if (Math.abs(widthDiffPct) > c.tolSizePct) reasons.push(`Ancho ${signed(widthDiffPct)}%`);
-  if (Math.abs(heightDiffPct) > c.tolSizePct) reasons.push(`Alto ${signed(heightDiffPct)}%`);
-  if (Math.abs(areaDiffPct) > c.tolAreaPct) reasons.push(`Área ${signed(areaDiffPct)}%`);
-
-  let textOffset = null;
-  if (!m.text || !Number.isFinite(m.text.offsetMm)) {
-    reasons.push('Texto no detectado');
-  } else {
-    textOffset = m.text.offsetMm;
-    if (Math.abs(textOffset) > c.tolTextMm) {
-      reasons.push(`Texto descentrado ${textOffset > 0 ? 'derecha' : 'izquierda'} ${Math.abs(textOffset).toFixed(1)} mm`);
-    }
-  }
-
-  const pass = reasons.length === 0;
-  const result = {
-    pass,
-    widthMm: m.widthMm,
-    heightMm: m.heightMm,
-    areaMm: m.areaMm,
-    textOffsetMm: textOffset,
-    reason: pass ? 'Dentro de tolerancia' : reasons.join('; '),
-    box: m.det.box
-  };
-  setDecision(result);
-  clearOverlay();
-  drawBox(m.det.box, pass ? '#1fd18a' : '#ff4d5e', pass ? 'APROBADO' : 'RECHAZADO');
-  if (record) addLog(result);
-  return result;
-}
-
-function detectTextCenter(src, box) {
-  if (!pxPerMm) return null;
-  const ordered = orderPoints(box);
-  const s = sideLengths(ordered);
-  let w = Math.round(Math.max(s[0], s[2]));
-  let h = Math.round(Math.max(s[1], s[3]));
-  if (w < 20 || h < 20) return null;
-
-  // Forzamos orientación vertical cuando el parche es más alto que ancho.
-  let srcPts = ordered;
-  if (w > h) {
-    srcPts = [ordered[1], ordered[2], ordered[3], ordered[0]];
-    const temp = w; w = h; h = temp;
-  }
-
-  // Limitar tamaño de warp para rendimiento sin perder proporción. Mantiene escala aproximada si no excede.
-  const maxH = 900;
-  let scaleOut = 1;
-  if (h > maxH) scaleOut = maxH / h;
-  const outW = Math.max(40, Math.round(w * scaleOut));
-  const outH = Math.max(40, Math.round(h * scaleOut));
-
-  const srcData = [srcPts[0].x, srcPts[0].y, srcPts[1].x, srcPts[1].y, srcPts[2].x, srcPts[2].y, srcPts[3].x, srcPts[3].y];
-  const dstData = [0, 0, outW - 1, 0, outW - 1, outH - 1, 0, outH - 1];
-  const srcMat = cv.matFromArray(4, 1, cv.CV_32FC2, srcData);
-  const dstMat = cv.matFromArray(4, 1, cv.CV_32FC2, dstData);
-  const M = cv.getPerspectiveTransform(srcMat, dstMat);
-  const warped = new cv.Mat();
-  const gray = new cv.Mat();
-  const roi = new cv.Mat();
-  const bin = new cv.Mat();
-  const contours = new cv.MatVector();
-  const hierarchy = new cv.Mat();
-  const kernel = cv.Mat.ones(2, 2, cv.CV_8U);
-
-  try {
-    cv.warpPerspective(src, warped, M, new cv.Size(outW, outH), cv.INTER_LINEAR, cv.BORDER_CONSTANT, new cv.Scalar());
-    cv.cvtColor(warped, gray, cv.COLOR_RGBA2GRAY);
-    const c = cfg();
-    const y1 = Math.round(outH * c.textStart);
-    const y2 = Math.round(outH * c.textEnd);
-    const roiRect = new cv.Rect(Math.round(outW * 0.04), y1, Math.round(outW * 0.92), Math.max(5, y2 - y1));
-    const roiGray = gray.roi(roiRect);
-    roiGray.copyTo(roi);
-    roiGray.delete();
-
-    cv.GaussianBlur(roi, roi, new cv.Size(3, 3), 0);
-    cv.threshold(roi, bin, 0, 255, cv.THRESH_BINARY_INV + cv.THRESH_OTSU);
-    cv.morphologyEx(bin, bin, cv.MORPH_OPEN, kernel);
-    cv.findContours(bin, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
-
-    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-    const roiArea = roi.rows * roi.cols;
-    let used = 0;
-    for (let i = 0; i < contours.size(); i++) {
-      const contour = contours.get(i);
-      const area = cv.contourArea(contour);
-      const br = cv.boundingRect(contour);
-      contour.delete();
-      if (area < Math.max(3, roiArea * 0.00025)) continue;
-      if (br.width > roi.cols * 0.88 && br.height < roi.rows * 0.18) continue; // probablemente borde/línea
-      if (br.height > roi.rows * 0.8 || br.width > roi.cols * 0.95) continue; // borde grande
-      minX = Math.min(minX, br.x);
-      maxX = Math.max(maxX, br.x + br.width);
-      minY = Math.min(minY, br.y);
-      maxY = Math.max(maxY, br.y + br.height);
-      used++;
-    }
-
-    if (!used || !isFinite(minX)) return null;
-    const textCenterX = roiRect.x + (minX + maxX) / 2;
-    const patchCenterX = outW / 2;
-    const pxOffsetInWarp = (textCenterX - patchCenterX) / scaleOut;
-    const offsetMm = pxOffsetInWarp / pxPerMm;
-    return {
-      offsetMm,
-      textBox: { x: (roiRect.x + minX) / scaleOut, y: (roiRect.y + minY) / scaleOut, w: (maxX - minX) / scaleOut, h: (maxY - minY) / scaleOut },
-      usedContours: used
-    };
-  } finally {
-    srcMat.delete(); dstMat.delete(); M.delete(); warped.delete(); gray.delete(); roi.delete(); bin.delete(); contours.delete(); hierarchy.delete(); kernel.delete();
-  }
-}
-
-function setDecision(res, msg = '') {
-  if (!res) {
-    $('decision').textContent = 'ESPERANDO';
-    $('decision').className = 'decision neutral';
-    $('reason').textContent = msg || 'Esperando parche.';
-    return;
-  }
-  $('decision').textContent = res.pass ? 'APROBADO' : 'RECHAZADO';
-  $('decision').className = `decision ${res.pass ? 'ok' : 'bad'}`;
-  $('mWidth').textContent = `${res.widthMm.toFixed(1)} mm`;
-  $('mHeight').textContent = `${res.heightMm.toFixed(1)} mm`;
-  $('mArea').textContent = `${res.areaMm.toFixed(0)} mm²`;
-  $('mText').textContent = Number.isFinite(res.textOffsetMm) ? `${res.textOffsetMm.toFixed(1)} mm` : '--';
-  $('reason').textContent = res.reason;
-}
-
-function addLog(res) {
-  const c = cfg();
-  const row = {
-    time: new Date().toLocaleString(),
-    lot: c.lot,
-    result: res.pass ? 'APROBADO' : 'RECHAZADO',
-    width: res.widthMm.toFixed(1),
-    height: res.heightMm.toFixed(1),
-    area: res.areaMm.toFixed(0),
-    textOffset: Number.isFinite(res.textOffsetMm) ? res.textOffsetMm.toFixed(1) : '',
-    reason: res.reason
-  };
-  log.unshift(row);
-  log = log.slice(0, 1000);
-  localStorage.setItem('ipp_v5_log', JSON.stringify(log));
-  renderLog();
+function exportCSV() {
+  const head = 'Hora,Resultado,Ancho,Alto,Area,TextoOffset,Motivo\n';
+  const body = log.map(r => [r.time, r.result, r.width, r.height, r.area, r.text, `"${String(r.reason).replace(/"/g, '""')}"`].join(',')).join('\n');
+  const blob = new Blob([head + body], { type: 'text/csv;charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'historial_inspector_parches_v6.csv';
+  a.click();
 }
 
 function loop() {
   if (!stream) return;
-  if (autoMode && window.cvReady && pxPerMm && reference) {
-    const m = measureCurrentPatch();
-    const present = m && !m.error;
-    if (present && !autoLocked) {
-      // Medimos una vez y bloqueamos hasta que retiren el parche.
-      const result = auditCurrentPatch(true);
-      if (result) {
-        autoLocked = true;
-        absentFrames = 0;
-        updateStateUI();
-      }
-    } else if (!present && autoLocked) {
-      absentFrames++;
-      if (absentFrames >= 4) {
-        autoLocked = false;
-        absentFrames = 0;
-        setDecision(null, 'Listo para siguiente parche.');
-        clearOverlay();
-        updateStateUI();
-      }
+  if (autoMode && Date.now() - lastAutoTs > AUTOCAPTURE_MS) {
+    const res = analyzeFrame(false);
+    if (res && !measuredLocked && reference) {
+      addLog(res);
+      measuredLocked = true;
+      lastAutoTs = Date.now();
     }
   }
-  setTimeout(() => requestAnimationFrame(loop), autoMode ? 550 : 120);
+  requestAnimationFrame(loop);
 }
 
-function exportCSV() {
-  const head = 'Hora,Lote,Resultado,Ancho,Alto,Area,TextoOffset,Motivo\n';
-  const body = log.map(r => [r.time, r.lot, r.result, r.width, r.height, r.area, r.textOffset, `"${String(r.reason).replaceAll('"', '""')}"`].join(',')).join('\n');
-  const blob = new Blob([head + body], { type: 'text/csv;charset=utf-8' });
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = `historial_inspector_parches_${new Date().toISOString().slice(0,10)}.csv`;
-  a.click();
-  URL.revokeObjectURL(a.href);
-}
-
-function clearCalibration() {
-  pxPerMm = 0;
-  calibration = null;
-  reference = null;
-  localStorage.removeItem('ipp_v5_pxPerMm');
-  localStorage.removeItem('ipp_v5_calibration');
-  localStorage.removeItem('ipp_v5_reference');
-  updateStateUI();
-  setDecision(null, 'Calibración y referencia borradas.');
-  toast('Calibración y referencia borradas.');
-}
-
-function orderPoints(points) {
-  const pts = points.map(p => ({ x: p.x, y: p.y }));
-  const sums = pts.map(p => p.x + p.y);
-  const diffs = pts.map(p => p.x - p.y);
-  const tl = pts[sums.indexOf(Math.min(...sums))];
-  const br = pts[sums.indexOf(Math.max(...sums))];
-  const tr = pts[diffs.indexOf(Math.max(...diffs))];
-  const bl = pts[diffs.indexOf(Math.min(...diffs))];
-  return [tl, tr, br, bl];
-}
-
-function sideLengths(pts) {
-  return [dist(pts[0], pts[1]), dist(pts[1], pts[2]), dist(pts[2], pts[3]), dist(pts[3], pts[0])];
-}
-function dist(a, b) { return Math.hypot(a.x - b.x, a.y - b.y); }
-function avg(arr) { return arr.reduce((s, v) => s + v, 0) / arr.length; }
-function stddev(arr) { const a = avg(arr); return Math.sqrt(avg(arr.map(v => (v - a) ** 2))); }
-function wait(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
-function signed(n) { return `${n >= 0 ? '+' : ''}${n.toFixed(1)}`; }
-
-$('btnStart').addEventListener('click', startCamera);
-$('btnCalibrateAuto').addEventListener('click', calibrateAutoSquare);
-$('btnCalibrateManual').addEventListener('click', startManualCalibration);
-$('btnReference').addEventListener('click', takeReference);
-$('btnMeasure').addEventListener('click', () => auditCurrentPatch(true));
-$('btnAuto').addEventListener('click', () => {
-  if (!pxPerMm || !reference) { toast('Necesitas calibración y referencia antes de Auto.'); return; }
+function toggleAuto() {
+  if (!pxPerMm) return toast('Primero calibra escala.');
+  if (!reference) return toast('Primero toma referencia aprobada.');
   autoMode = !autoMode;
-  autoLocked = false;
-  absentFrames = 0;
+  measuredLocked = false;
+  missingFrames = 0;
   $('btnAuto').dataset.active = String(autoMode);
   $('btnAuto').textContent = `Auto: ${autoMode ? 'ON' : 'OFF'}`;
-  $('operatorMessage').textContent = autoMode ? 'Auto activo: coloca parche, espera resultado, retira parche, siguiente.' : 'Auto detenido.';
-  updateStateUI();
-});
-$('btnExport').addEventListener('click', exportCSV);
-$('btnReset').addEventListener('click', () => {
-  log = [];
-  localStorage.removeItem('ipp_v5_log');
-  renderLog();
-  toast('Conteo reiniciado.');
-});
-$('btnClearCalibration').addEventListener('click', clearCalibration);
+  $('guideText').textContent = autoMode ? 'Auditando: coloca y retira pieza' : 'Auto detenido';
+  updateStatus();
+}
 
-// Redibuja si el usuario cambia orientación.
-setInterval(() => {
-  if (overlay.clientWidth !== Math.round(videoWrap.getBoundingClientRect().width)) resizeOverlay();
-}, 1000);
+async function connectToPc() {
+  const target = $('peerTarget').value.trim();
+  if (!target) return toast('Pega el ID que aparece en el monitor PC.');
+  if (!stream) return toast('Primero inicia cámara.');
+  try {
+    if (!peer) peer = new Peer(undefined, { debug: 1 });
+    await new Promise((resolve, reject) => {
+      if (peer.open) return resolve();
+      peer.once('open', resolve);
+      peer.once('error', reject);
+      setTimeout(() => reject(new Error('PeerJS tardó demasiado.')), 7000);
+    });
+    dataConn = peer.connect(target, { reliable: true });
+    dataConn.on('open', () => {
+      $('pcStatus').textContent = 'Conectado a PC. Enviando resultados.';
+      toast('Monitor PC conectado.');
+      sendResultToPc(latestResult);
+    });
+    dataConn.on('close', () => $('pcStatus').textContent = 'Conexión PC cerrada.');
+    dataConn.on('error', e => $('pcStatus').textContent = `Error PC: ${e.message || e}`);
+    mediaCall = peer.call(target, stream);
+    $('pcStatus').textContent = 'Conectando a PC...';
+  } catch (e) {
+    console.error(e);
+    $('pcStatus').textContent = 'No se pudo conectar a PC.';
+    toast('No se pudo conectar a PC. Revisa ID e internet.', 3500);
+  }
+}
+
+function stopPc() {
+  if (mediaCall) mediaCall.close();
+  if (dataConn) dataConn.close();
+  mediaCall = null;
+  dataConn = null;
+  $('pcStatus').textContent = 'Sin conexión a PC.';
+}
+
+function sendResultToPc(res) {
+  if (!dataConn || !dataConn.open) return;
+  dataConn.send({
+    type: 'result',
+    result: res ? {
+      pass: res.pass,
+      width: res.widthMm?.toFixed(1),
+      height: res.heightMm?.toFixed(1),
+      text: res.textFound ? res.textOffsetMm.toFixed(1) : 'ND',
+      reason: res.reason,
+      total: log.length
+    } : null
+  });
+}
+
+$('btnStart').onclick = startCamera;
+$('btnCalAuto').onclick = calibrateAutoSquare;
+$('btnCalManual').onclick = calibrateManualSquare;
+$('btnReference').onclick = takeReference;
+$('btnMeasure').onclick = () => analyzeFrame(true);
+$('btnAuto').onclick = toggleAuto;
+$('btnExport').onclick = exportCSV;
+$('btnReset').onclick = () => {
+  if (!confirm('¿Reiniciar conteo?')) return;
+  log = [];
+  localStorage.removeItem('v6_log');
+  renderLog();
+};
+$('btnConnectPc').onclick = connectToPc;
+$('btnStopPc').onclick = stopPc;
+
+['ruleTextCenter', 'ruleSize', 'ruleArea', 'ruleAngle', 'tolText', 'tolSizePct', 'tolAreaPct', 'tolAngle'].forEach(id => {
+  $(id).addEventListener('change', () => {
+    localStorage.setItem(`v6_${id}`, $(id).type === 'checkbox' ? String($(id).checked) : $(id).value);
+  });
+});
+
+function loadSettings() {
+  ['ruleTextCenter', 'ruleSize', 'ruleArea', 'ruleAngle'].forEach(id => {
+    const v = localStorage.getItem(`v6_${id}`);
+    if (v !== null) $(id).checked = v === 'true';
+  });
+  ['tolText', 'tolSizePct', 'tolAreaPct', 'tolAngle'].forEach(id => {
+    const v = localStorage.getItem(`v6_${id}`);
+    if (v !== null) $(id).value = v;
+  });
+}
+loadSettings();
+renderLog();
+updateStatus();
