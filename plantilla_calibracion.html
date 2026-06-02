@@ -2,32 +2,20 @@
 <html lang="es">
 <head>
 <meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Plantilla de calibración 5 x 5 cm</title>
+<title>Plantilla calibración 5x5 cm</title>
 <style>
   @page { size: letter; margin: 12mm; }
-  * { box-sizing: border-box; }
-  body { font-family: Arial, sans-serif; margin: 0; color: #111; background: white; }
-  .page { min-height: 100vh; display: grid; place-items: center; padding: 20mm; }
-  .card { border: 1px dashed #999; padding: 12mm; text-align: center; }
-  .label { font-size: 14px; margin-bottom: 8mm; }
-  .outer { width: 70mm; height: 70mm; background: #fff; border: 0.35mm solid #111; display: grid; place-items: center; margin: 0 auto; }
-  .square { width: 50mm; height: 50mm; background: #000; }
-  .notes { margin-top: 8mm; font-size: 12px; line-height: 1.4; text-align: left; max-width: 120mm; }
-  button { margin: 16px; padding: 10px 14px; border: 1px solid #444; border-radius: 8px; background: #111; color: white; font-weight: bold; }
-  @media print { button { display: none; } .page { padding: 0; } }
+  body { font-family: Arial, sans-serif; color:#111; }
+  .card { width: 70mm; height: 70mm; border: 0.4mm solid #ccc; display:flex; align-items:center; justify-content:center; background:white; }
+  .square { width: 50mm; height: 50mm; background:#000; }
+  p { max-width: 150mm; font-size: 12pt; line-height: 1.4; }
+  .note { margin-top: 10mm; }
 </style>
 </head>
 <body>
-<button onclick="window.print()">Imprimir plantilla</button>
-<div class="page">
-  <div class="card">
-    <div class="label"><strong>Plantilla de calibración</strong><br>Cuadro negro: 50 mm × 50 mm · Fondo blanco: 70 mm × 70 mm</div>
-    <div class="outer"><div class="square"></div></div>
-    <div class="notes">
-      <strong>Uso:</strong> imprime al 100%, sin ajustar a página. Verifica con regla que el cuadro negro mida exactamente 5 cm × 5 cm. Recorta dejando el borde blanco visible. Colócalo plano sobre la misma mesa donde se medirá el parche. Calibra y retíralo sin mover el celular.
-    </div>
-  </div>
-</div>
+  <h1>Plantilla de calibración 5 × 5 cm</h1>
+  <p>Imprime al 100%, sin “ajustar a página”. Verifica con regla que el cuadro negro mida exactamente 50 mm por 50 mm.</p>
+  <div class="card"><div class="square"></div></div>
+  <p class="note">Recorta dejando borde blanco alrededor. Coloca la tarjeta plana sobre la misma mesa donde medirás los parches. Calibra y retira sin mover el celular.</p>
 </body>
 </html>

@@ -1,38 +1,42 @@
-# Inspector de Parches Pro v4.2
+# Inspector de Parches Pro v5
 
-Versión de trabajo para GitHub Pages. Flujo: abrir cámara, calibrar escala con cuadro negro de 5×5 cm, retirar el cuadro sin mover el celular, tomar una referencia aprobada y auditar parches por tamaño, área, giro y texto centrado.
+Webapp para auditar parches con celular desde GitHub Pages.
 
-## Archivos
-Sube estos archivos sueltos a la raíz del repositorio:
+## Flujo correcto
 
-- `index.html`
-- `app.js`
-- `styles.css`
-- `plantilla_calibracion.html`
-- `README.md`
-
-## Uso recomendado
-
-1. Abre la página publicada en GitHub Pages desde el celular.
+1. Abre la página desde GitHub Pages en HTTPS.
 2. Presiona **Iniciar cámara**.
-3. Coloca el cuadro negro de 5×5 cm sobre la misma mesa donde irán los parches.
-4. Presiona **Calibrar automático 5×5**.
-5. Si no detecta el cuadro, presiona **Calibrar manual 4 esquinas** y toca las 4 esquinas del cuadro negro.
-6. Retira el cuadro sin mover el celular.
-7. Coloca un parche aprobado y presiona **Tomar referencia aprobada**.
-8. Usa **Medir ahora** o **Auto: ON** para auditar.
+3. Coloca el cuadro negro de 5 x 5 cm sobre tarjeta blanca.
+4. Presiona **Calibrar auto 5×5**.
+5. Si falla, usa **Calibrar manual 4 esquinas** y toca las 4 esquinas del cuadro negro.
+6. Retira el cuadro sin mover celular, soporte ni zoom.
+7. Coloca un parche aprobado.
+8. Presiona **Tomar referencia aprobada**.
+9. Activa **Auto: ON** para auditar.
 
-## Recomendaciones físicas
+## Condiciones físicas obligatorias
 
-- El celular debe quedar fijo, sin moverse después de calibrar.
-- El cuadro negro debe estar plano, en el mismo nivel que los parches.
-- Usa buena luz pareja.
-- Evita sombras fuertes.
-- Si el celular se mueve, borra calibración y recalibra.
+- Celular fijo, no en mano.
+- Fondo mate y contrastante.
+- Luz pareja, sin sombras fuertes.
+- El cuadro y el parche deben ir sobre la misma superficie y altura.
+- Si se mueve el celular después de calibrar, hay que recalibrar.
 
-## Cambios v4.2
+## Qué mide
 
-- Detección automática del cuadro 5×5 más tolerante a luz, sombras y tamaño.
-- Umbrales múltiples para detectar el cuadro negro.
-- Fallback de calibración manual tocando 4 esquinas.
-- Mensajes más claros cuando no se encuentra el cuadro.
+- Ancho contra referencia aprobada.
+- Alto contra referencia aprobada.
+- Área contra referencia aprobada.
+- Offset horizontal del texto respecto al centro del parche.
+- Conteo de aprobados/rechazados.
+- Historial exportable a CSV.
+
+## Archivos para GitHub
+
+Subir sueltos en la raíz del repositorio:
+
+- index.html
+- app.js
+- styles.css
+- plantilla_calibracion.html
+- README.md
