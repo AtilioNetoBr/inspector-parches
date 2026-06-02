@@ -3,58 +3,108 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Monitor PC | Inspector de Parches Pro v9</title>
+  <title>Monitor PC | Inspector Pro v10</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
-<body class="monitor-body">
-  <header class="app-header">
+<body class="monitor-page">
+  <header class="topbar">
     <div>
-      <h1>Monitor PC - Inspector de Parches Pro v9</h1>
-      <p>Escanea el QR con el iPhone. Verás video, líneas analizadas, recuadros y resultados en vivo.</p>
+      <h1>Monitor PC</h1>
+      <p>Vinculación por código, video del iPhone, diagnóstico y control remoto.</p>
     </div>
-    <div class="header-actions">
-      <span id="peerStatus" class="badge warn">Preparando QR…</span>
-      <span id="phoneStatus" class="badge idle">Celular no conectado</span>
-    </div>
+    <span id="monitorStatus" class="badge idle">Esperando</span>
   </header>
 
   <main class="monitor-layout">
-    <section class="monitor-video-wrap">
-      <video id="remoteVideo" autoplay playsinline muted></video>
-      <canvas id="monitorOverlay"></canvas>
+    <section class="card pair-card">
+      <h2>1. Código de vinculación</h2>
+      <div id="bigCode" class="big-code">---</div>
+      <p class="small">Escribe este código en el iPhone. Formato: 3 letras + 4 dígitos.</p>
+      <div class="button-row">
+        <button id="btnNewCode" class="secondary">Generar otro código</button>
+        <button id="btnCopyCode">Copiar código</button>
+      </div>
+      <p id="peerInfo" class="small">Servidor de enlace inicializando...</p>
     </section>
 
-    <aside class="side-panel">
-      <section class="card">
-        <h2>Sincronización por QR</h2>
-        <div id="qrcode" class="qr-box"></div>
-        <p class="small">Abre la cámara del iPhone, escanea este QR y entra a la app. Luego toca “Iniciar cámara”.</p>
-        <div id="appUrl" class="url-box"></div>
-      </section>
+    <section class="card live-card">
+      <h2>2. Video iPhone</h2>
+      <div class="monitor-video-shell">
+        <video id="remoteVideo" playsinline autoplay muted></video>
+      </div>
+      <p class="small">El análisis real aparece en la vista diagnóstica con todas las líneas y recuadros.</p>
+    </section>
 
-      <section class="card result-card">
-        <h2>Resultado en vivo</h2>
-        <div id="decision" class="decision neutral">ESPERANDO</div>
-        <p id="reason" class="reason">Esperando análisis del celular.</p>
-        <div class="metrics grid2">
-          <div><span>Alineación</span><strong id="mAlign">--</strong></div>
-          <div><span>Tamaño</span><strong id="mSize">--</strong></div>
-          <div><span>Perímetro</span><strong id="mPerimeter">--</strong></div>
-          <div><span>Área</span><strong id="mArea">--</strong></div>
-          <div><span>Offset texto</span><strong id="mOffset">--</strong></div>
-          <div><span>Ángulo texto</span><strong id="mAngle">--</strong></div>
-        </div>
-      </section>
+    <section class="card debug-card monitor-debug">
+      <h2>3. Vista diagnóstica con líneas</h2>
+      <img id="debugImage" alt="Vista diagnóstica" />
+      <div class="legend">
+        <span><i class="green"></i>Silueta</span>
+        <span><i class="yellow"></i>Caja parche</span>
+        <span><i class="magenta"></i>Texto</span>
+        <span><i class="cyan"></i>Centro parche</span>
+        <span><i class="red"></i>Centro texto</span>
+        <span><i class="orange"></i>Bordado/base</span>
+      </div>
+    </section>
 
-      <section class="card data-panel">
-        <h2>Datos recibidos</h2>
-        <pre id="dataLog">Sin datos.</pre>
-      </section>
-    </aside>
+    <section class="card result-card monitor-result">
+      <h2>4. Resultado en vivo</h2>
+      <div id="pcDecision" class="decision neutral">ESPERANDO</div>
+      <div class="metrics-grid">
+        <div><span>Score general</span><strong id="pcScore">--</strong></div>
+        <div><span>Alineación</span><strong id="pcAlign">--</strong></div>
+        <div><span>Tamaño</span><strong id="pcSize">--</strong></div>
+        <div><span>Perímetro</span><strong id="pcPerim">--</strong></div>
+        <div><span>Área</span><strong id="pcArea">--</strong></div>
+        <div><span>Base a Texto</span><strong id="pcBaseText">--</strong></div>
+        <div><span>Offset texto</span><strong id="pcOffset">--</strong></div>
+        <div><span>Ángulo texto</span><strong id="pcTextAngle">--</strong></div>
+      </div>
+      <p id="pcReason" class="reason">Esperando conexión.</p>
+    </section>
+
+    <section class="card controls-card">
+      <h2>5. Manipular desde PC</h2>
+      <div class="button-grid">
+        <button data-cmd="detectCard" class="secondary">Detectar tarjeta</button>
+        <button data-cmd="takeReference" class="secondary">Tomar referencia 100%</button>
+        <button data-cmd="measureNow">Medir ahora</button>
+        <button data-cmd="toggleAuto">Auto ON/OFF</button>
+        <button data-cmd="resetLog" class="danger">Reiniciar conteo</button>
+      </div>
+      <p class="small">Por seguridad de iPhone, la cámara normalmente debe iniciarse desde el celular.</p>
+    </section>
+
+    <section class="card config-card monitor-config">
+      <h2>6. Parámetros desde PC</h2>
+      <div class="toggle-list">
+        <label><input id="pcValidateText" type="checkbox" checked /> Rechazar por alineación de texto</label>
+        <label><input id="pcValidateSize" type="checkbox" /> Rechazar por tamaño contra referencia</label>
+        <label><input id="pcValidateShape" type="checkbox" /> Rechazar por área/perímetro</label>
+      </div>
+      <div class="grid2">
+        <label>Mínimo aceptable %<input id="pcMinScore" type="number" value="85" min="0" max="100" /></label>
+        <label>Error horizontal máx. mm<input id="pcMaxErrX" type="number" value="3" step="0.1" /></label>
+        <label>Error vertical máx. mm<input id="pcMaxErrY" type="number" value="3" step="0.1" /></label>
+        <label>Error Base a Texto máx. mm<input id="pcMaxErrBase" type="number" value="2.5" step="0.1" /></label>
+        <label>Ángulo texto máx. °<input id="pcMaxTextAngle" type="number" value="5" step="0.1" /></label>
+        <label>Tolerancia tamaño %<input id="pcSizeTolPct" type="number" value="5" step="0.5" /></label>
+        <label>Zona texto desde %<input id="pcTextZoneStart" type="number" value="62" min="0" max="100" /></label>
+        <label>Zona texto hasta %<input id="pcTextZoneEnd" type="number" value="96" min="0" max="100" /></label>
+      </div>
+      <button id="btnPushConfig" class="primary">Enviar configuración al iPhone</button>
+    </section>
+
+    <section class="card log-card monitor-log">
+      <h2>Historial recibido</h2>
+      <div class="counter"><div><span>Aprobados</span><strong id="pcOk">0</strong></div><div><span>Rechazados</span><strong id="pcBad">0</strong></div><div><span>Total</span><strong id="pcTotal">0</strong></div></div>
+      <div class="table-wrap"><table><thead><tr><th>Hora</th><th>Resultado</th><th>Score</th><th>Base-Texto</th><th>Motivo</th></tr></thead><tbody id="pcLogBody"></tbody></table></div>
+    </section>
   </main>
 
-  <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+  <div id="toast" class="toast"></div>
+  <script src="https://unpkg.com/peerjs@1.5.5/dist/peerjs.min.js"></script>
   <script src="monitor.js"></script>
 </body>
 </html>

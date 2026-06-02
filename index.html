@@ -3,184 +3,146 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <meta name="theme-color" content="#07101f" />
-  <title>Inspector de Parches Pro v9 | Mardur</title>
+  <title>Inspector de Parches Pro v10 | iPhone</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
-<body>
-  <header class="app-header">
+<body class="phone-page">
+  <header class="topbar">
     <div>
-      <h1>Inspector de Parches Pro v9</h1>
-      <p>Tarjeta 7×7 / 5×5, silueta, perímetro, texto alineado y monitoreo PC por QR.</p>
+      <h1>Inspector Pro v10</h1>
+      <p>iPhone: cámara, análisis, calibración 7×7/5×5 y envío al monitor PC.</p>
     </div>
-    <div class="header-actions">
-      <span id="cvStatus" class="badge warn">OpenCV cargando…</span>
-      <span id="cameraStatus" class="badge idle">Sin cámara</span>
-      <span id="monitorStatus" class="badge idle">PC no conectado</span>
-    </div>
+    <span id="statusBadge" class="badge idle">Sin cámara</span>
   </header>
 
-  <main class="layout">
-    <section class="card camera-panel">
-      <div class="stage-strip">
-        <span id="stepCam" class="step on">1 Cámara</span>
-        <span id="stepCal" class="step">2 Calibración</span>
-        <span id="stepRef" class="step">3 Referencia</span>
-        <span id="stepAudit" class="step">4 Auditoría</span>
-      </div>
-
-      <div class="video-wrap">
+  <main class="phone-layout">
+    <section class="card camera-card">
+      <div class="video-shell">
         <video id="video" playsinline autoplay muted></video>
         <canvas id="overlay"></canvas>
         <canvas id="captureCanvas" hidden></canvas>
-        <canvas id="workCanvas" hidden></canvas>
-        <div class="screen-guide">
-          <div class="guide-title" id="guideTitle">Inicia cámara o usa foto</div>
-          <div class="guide-sub" id="guideSub">Para iPhone, si Safari molesta, usa “Analizar foto”.</div>
-        </div>
+        <div class="guide-frame"></div>
       </div>
-
-      <div class="controls grouped">
+      <div class="button-row">
         <button id="btnStart" class="primary">Iniciar cámara</button>
-        <button id="btnSwitchCam">Cambiar cámara</button>
-        <label class="file-btn">Analizar foto
-          <input id="fileInput" type="file" accept="image/*" capture="environment" />
+        <button id="btnSwitch">Cambiar cámara</button>
+        <label class="file-button">Analizar foto
+          <input id="photoInput" type="file" accept="image/*" capture="environment" hidden />
         </label>
-        <button id="btnReconnectMonitor">Conectar PC</button>
       </div>
-
-      <details class="card-mini" open>
-        <summary>Monitor PC por QR</summary>
-        <div class="qr-row">
-          <label>ID monitor PC
-            <input id="monitorId" placeholder="Se llena automático si escaneas QR" />
-          </label>
-          <button id="btnConnectMonitor" class="secondary">Transmitir a PC</button>
-        </div>
-        <p class="small">En la PC abre <strong>monitor.html</strong>, escanea el QR con el iPhone y la app se abre ya sincronizada.</p>
-      </details>
+      <p class="small" id="cameraHelp">En iPhone abre desde GitHub Pages HTTPS. No desde github.com.</p>
     </section>
 
-    <aside class="side-panel">
-      <section class="card result-card">
-        <h2>Resultado</h2>
-        <div id="decision" class="decision neutral">ESPERANDO</div>
-        <p id="reason" class="reason">Inicia cámara, calibra la tarjeta y toma una referencia aprobada.</p>
-        <div class="metrics grid2">
-          <div><span>Alineación texto</span><strong id="mAlign">--</strong></div>
-          <div><span>Tamaño</span><strong id="mSize">--</strong></div>
-          <div><span>Perímetro</span><strong id="mPerimeter">--</strong></div>
-          <div><span>Área</span><strong id="mArea">--</strong></div>
-          <div><span>Offset texto</span><strong id="mTextOffset">--</strong></div>
-          <div><span>Ángulo texto</span><strong id="mTextAngle">--</strong></div>
-        </div>
-      </section>
+    <section class="card pc-link-card">
+      <h2>Vincular con PC</h2>
+      <div class="pair-row">
+        <input id="pairCode" placeholder="ABC1234" maxlength="7" autocomplete="off" />
+        <button id="btnConnectPc" class="secondary">Conectar</button>
+      </div>
+      <p id="pcStatus" class="small">Abre el monitor en PC y escribe aquí el código de 3 letras + 4 dígitos.</p>
+    </section>
 
-      <section class="card">
-        <h2>1. Calibración tarjeta</h2>
-        <p class="small">Usa tarjeta blanca 7×7 cm con cuadro negro 5×5 cm centrado. Primero detecta blanco exterior, corrige perspectiva y valida el negro interior.</p>
-        <div class="controls stack">
-          <button id="btnDetectCard" class="primary">Detectar tarjeta 7×7 / 5×5</button>
-          <button id="btnRecalibrate">Recalibrar</button>
-        </div>
-        <div class="readout">
-          <div><span>Estado</span><strong id="calState">Sin calibrar</strong></div>
-          <div><span>Confianza</span><strong id="calConfidence">--</strong></div>
-          <div><span>Escala</span><strong id="calScale">--</strong></div>
-          <div><span>Negro interior</span><strong id="innerSize">--</strong></div>
-        </div>
-      </section>
+    <section class="card step-card">
+      <h2>Flujo de trabajo</h2>
+      <div class="steps">
+        <div id="stepCamera" class="step pending"><span>1</span><b>Cámara</b><em>Inicia cámara</em></div>
+        <div id="stepCard" class="step pending"><span>2</span><b>Tarjeta</b><em>Detecta 7×7 / 5×5</em></div>
+        <div id="stepRef" class="step pending"><span>3</span><b>Referencia</b><em>Guarda pieza 100%</em></div>
+        <div id="stepAudit" class="step pending"><span>4</span><b>Auditoría</b><em>Mide y compara</em></div>
+      </div>
+      <div class="button-grid">
+        <button id="btnDetectCard" class="secondary">Detectar tarjeta 7×7 / 5×5</button>
+        <button id="btnTakeRef" class="secondary">Tomar referencia 100%</button>
+        <button id="btnMeasure">Medir ahora</button>
+        <button id="btnAuto" data-active="false">Auto: OFF</button>
+      </div>
+      <p id="workflowHelp" class="small">La tarjeta solo calibra escala/perspectiva. El rechazo se hace contra la referencia aprobada.</p>
+    </section>
 
-      <section class="card">
-        <h2>2. Referencia aprobada</h2>
-        <p class="small">Coloca un parche bueno. Guarda su silueta y bloque de texto como referencia.</p>
-        <div class="controls stack">
-          <button id="btnSaveReference" class="secondary">Tomar referencia aprobada</button>
-          <button id="btnClearReference">Borrar referencia</button>
-        </div>
-        <p id="refState" class="small">Referencia: no guardada.</p>
-      </section>
+    <section class="card result-card">
+      <h2>Resultado</h2>
+      <div id="decision" class="decision neutral">ESPERANDO</div>
+      <div class="metrics-grid">
+        <div><span>Score general</span><strong id="mScore">--</strong></div>
+        <div><span>Alineación texto</span><strong id="mAlign">--</strong></div>
+        <div><span>Tamaño</span><strong id="mSize">--</strong></div>
+        <div><span>Perímetro</span><strong id="mPerim">--</strong></div>
+        <div><span>Área</span><strong id="mArea">--</strong></div>
+        <div><span>Base a Texto</span><strong id="mBaseText">--</strong></div>
+        <div><span>Offset texto</span><strong id="mOffset">--</strong></div>
+        <div><span>Ángulo texto</span><strong id="mTextAngle">--</strong></div>
+      </div>
+      <p id="reason" class="reason">Esperando medición.</p>
+    </section>
 
-      <section class="card">
-        <h2>3. Auditoría</h2>
-        <div class="controls stack">
-          <button id="btnMeasure" class="primary">Medir ahora</button>
-          <button id="btnAuto" data-active="false">Auto: OFF</button>
-        </div>
-        <label>Lote / referencia
-          <input id="lotName" value="Hidalgo" />
+    <section class="card config-card">
+      <h2>Parámetros editables</h2>
+      <div class="toggle-list">
+        <label><input id="validateText" type="checkbox" checked /> Rechazar por alineación de texto</label>
+        <label><input id="validateSize" type="checkbox" /> Rechazar por tamaño contra referencia</label>
+        <label><input id="validateShape" type="checkbox" /> Rechazar por área/perímetro</label>
+      </div>
+      <div class="grid2">
+        <label>Mínimo aceptable %
+          <input id="minScore" type="number" value="85" min="0" max="100" step="1" />
         </label>
-        <div class="grid2">
-          <label>Mín. alineación %
-            <input id="minAlign" type="number" value="85" step="1" />
-          </label>
-          <label>Error horiz. máx. mm
-            <input id="maxErrX" type="number" value="3" step="0.1" />
-          </label>
-          <label>Error vertical máx. mm
-            <input id="maxErrY" type="number" value="3" step="0.1" />
-          </label>
-          <label>Ángulo texto máx. °
-            <input id="maxTextAngle" type="number" value="5" step="0.5" />
-          </label>
-          <label>Zona texto desde % alto
-            <input id="textYStart" type="number" value="45" step="1" />
-          </label>
-          <label>Zona texto hasta % alto
-            <input id="textYEnd" type="number" value="92" step="1" />
-          </label>
-        </div>
-        <div class="checks">
-          <label><input id="chkText" type="checkbox" checked /> Rechazar por texto no alineado</label>
-          <label><input id="chkSize" type="checkbox" /> Rechazar por tamaño contra referencia</label>
-          <label><input id="chkArea" type="checkbox" /> Rechazar por área/perímetro</label>
-        </div>
-      </section>
+        <label>Error horizontal máx. mm
+          <input id="maxErrX" type="number" value="3" step="0.1" />
+        </label>
+        <label>Error vertical máx. mm
+          <input id="maxErrY" type="number" value="3" step="0.1" />
+        </label>
+        <label>Error Base a Texto máx. mm
+          <input id="maxErrBase" type="number" value="2.5" step="0.1" />
+        </label>
+        <label>Ángulo texto máx. °
+          <input id="maxTextAngle" type="number" value="5" step="0.1" />
+        </label>
+        <label>Tolerancia tamaño %
+          <input id="sizeTolPct" type="number" value="5" step="0.5" />
+        </label>
+        <label>Zona texto desde % alto
+          <input id="textZoneStart" type="number" value="62" min="0" max="100" step="1" />
+        </label>
+        <label>Zona texto hasta % alto
+          <input id="textZoneEnd" type="number" value="96" min="0" max="100" step="1" />
+        </label>
+      </div>
+      <div class="button-row">
+        <button id="btnSendConfig" class="secondary">Enviar config a PC</button>
+        <button id="btnReset" class="danger">Reiniciar conteo</button>
+      </div>
+    </section>
 
-      <section class="card">
-        <h2>Conteo</h2>
-        <div class="counter">
-          <div><span>Aprobados</span><strong id="okCount">0</strong></div>
-          <div><span>Rechazados</span><strong id="badCount">0</strong></div>
-          <div><span>Total</span><strong id="totalCount">0</strong></div>
-          <div><span>% OK</span><strong id="okPct">--</strong></div>
-        </div>
-        <div class="controls stack">
-          <button id="btnExport">Exportar CSV</button>
-          <button id="btnReset" class="danger">Reiniciar conteo</button>
-        </div>
-      </section>
-    </aside>
-  </main>
-
-  <section class="diagnostics">
-    <section class="card">
-      <h2>Diagnóstico visual</h2>
-      <div class="debug-grid">
-        <div><h3>Máscara tarjeta blanca</h3><canvas id="debugWhite"></canvas></div>
-        <div><h3>Tarjeta rectificada</h3><canvas id="debugWarp"></canvas></div>
-        <div><h3>Parche rectificado</h3><canvas id="debugPatch"></canvas></div>
-        <div><h3>Máscara texto</h3><canvas id="debugText"></canvas></div>
+    <section class="card debug-card">
+      <h2>Vista diagnóstica</h2>
+      <canvas id="debugCanvas" width="700" height="700"></canvas>
+      <div class="legend">
+        <span><i class="green"></i>Silueta</span>
+        <span><i class="yellow"></i>Caja parche</span>
+        <span><i class="magenta"></i>Texto</span>
+        <span><i class="cyan"></i>Centro parche</span>
+        <span><i class="red"></i>Centro texto</span>
+        <span><i class="orange"></i>Bordado/base</span>
       </div>
     </section>
 
     <section class="card log-card">
       <h2>Historial</h2>
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr><th>Hora</th><th>Lote</th><th>Resultado</th><th>Alineación</th><th>Tamaño</th><th>Perímetro</th><th>Área</th><th>Motivo</th></tr>
-          </thead>
-          <tbody id="logBody"></tbody>
-        </table>
+      <div class="counter">
+        <div><span>Aprobados</span><strong id="okCount">0</strong></div>
+        <div><span>Rechazados</span><strong id="badCount">0</strong></div>
+        <div><span>Total</span><strong id="totalCount">0</strong></div>
       </div>
+      <div class="button-row"><button id="btnExport">Exportar CSV</button></div>
+      <div class="table-wrap"><table><thead><tr><th>Hora</th><th>Resultado</th><th>Score</th><th>Base-Texto</th><th>Motivo</th></tr></thead><tbody id="logBody"></tbody></table></div>
     </section>
-  </section>
+  </main>
 
   <div id="toast" class="toast"></div>
 
-  <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
-  <script async src="https://docs.opencv.org/4.x/opencv.js" onload="window.__opencvScriptLoaded=true"></script>
+  <script src="https://unpkg.com/peerjs@1.5.5/dist/peerjs.min.js"></script>
+  <script async src="https://docs.opencv.org/4.x/opencv.js" onload="cv['onRuntimeInitialized']=()=>{window.cvReady=true;window.dispatchEvent(new Event('opencv-ready'));}"></script>
   <script src="app.js"></script>
 </body>
 </html>

@@ -1,78 +1,89 @@
 const $ = id => document.getElementById(id);
-const remoteVideo = $('remoteVideo');
-const overlay = $('monitorOverlay');
-const ctx = overlay.getContext('2d');
-let peer=null;
-let lastPayload=null;
+const PEER_PREFIX = 'mardur-inspector-v10-';
+let peer=null, conn=null, currentCode='', log=[];
+function toast(msg){ const t=$('toast'); t.textContent=msg; t.classList.add('show'); clearTimeout(toast._t); toast._t=setTimeout(()=>t.classList.remove('show'),2200); }
+function setStatus(text, cls='idle'){ $('monitorStatus').textContent=text; $('monitorStatus').className='badge '+cls; }
+function fmt(n,d=1){ return Number.isFinite(n)?Number(n).toFixed(d):'--'; }
+function generateCode(){ const letters='ABCDEFGHJKLMNPQRSTUVWXYZ'; let s=''; for(let i=0;i<3;i++) s+=letters[Math.floor(Math.random()*letters.length)]; for(let i=0;i<4;i++) s+=Math.floor(Math.random()*10); return s; }
+function startPeer(code=generateCode()){
+  currentCode=code; $('bigCode').textContent=code;
+  if(peer){ try{peer.destroy();}catch(e){} }
+  setStatus('Inicializando','warn');
+  const id=PEER_PREFIX+code.toLowerCase();
+  peer=new Peer(id,{debug:0});
+  peer.on('open',()=>{ setStatus('Esperando iPhone','warn'); $('peerInfo').textContent='ID listo: '+id; });
+  peer.on('connection',c=>{ conn=c; setupConn(); });
+  peer.on('call',call=>{ call.answer(); call.on('stream',remoteStream=>{ $('remoteVideo').srcObject=remoteStream; setStatus('Video conectado','live'); }); });
+  peer.on('error',err=>{ console.error(err); setStatus('Error enlace','bad'); $('peerInfo').textContent='Error: '+err.type+'. Genera otro código si hace falta.'; });
+}
+function setupConn(){
+  setStatus('iPhone conectado','ok'); toast('iPhone vinculado');
+  conn.on('data',handleMsg);
+  conn.on('close',()=>{ setStatus('iPhone desconectado','bad'); });
+  conn.send({type:'hello',role:'monitor',code:currentCode});
+  pushConfig();
+}
+function send(obj){ if(conn && conn.open){ try{conn.send(obj);}catch(e){console.warn(e);} } else toast('Aún no hay iPhone conectado'); }
+function cmd(name,payload=null){ send({type:'command',cmd:name,payload}); }
+function handleMsg(msg){
+  if(!msg) return;
+  if(msg.type==='state') updateState(msg);
+  if(msg.type==='analysis') updateAnalysis(msg);
+  if(msg.type==='calibration') { if(msg.debugImage) $('debugImage').src=msg.debugImage; toast('Calibración recibida'); }
+  if(msg.type==='reference') toast('Referencia 100% guardada en iPhone');
+  if(msg.type==='log') { log=msg.log||[]; renderLog(msg.counts); }
+  if(msg.type==='error') toast((msg.scope||'Error')+': '+msg.message);
+}
+function updateState(s){
+  const pieces=[];
+  pieces.push(s.camera?'Cámara OK':'Sin cámara');
+  pieces.push(s.calibration?'Calibrado':'Sin calibrar');
+  pieces.push(s.reference?'Referencia OK':'Sin referencia');
+  pieces.push(s.autoMode?'Auto ON':'Auto OFF');
+  $('peerInfo').textContent=pieces.join(' · ');
+  if(s.config) applyConfigToPC(s.config);
+  if(s.counts) renderCounts(s.counts);
+}
+function updateAnalysis(msg){
+  if(msg.debugImage) $('debugImage').src=msg.debugImage;
+  const r=msg.result;
+  if(!r){ $('pcReason').textContent=msg.reason||'Sin resultado'; return; }
+  $('pcDecision').textContent=r.pass?'APROBADO':'RECHAZADO';
+  $('pcDecision').className='decision '+(r.pass?'ok':'bad');
+  $('pcScore').textContent=fmt(r.score,0)+'%';
+  $('pcAlign').textContent=fmt(r.alignScore,0)+'%';
+  $('pcSize').textContent=r.sizeCm || '--';
+  $('pcPerim').textContent=fmt(r.perimCm,2)+' cm';
+  $('pcArea').textContent=fmt(r.areaCm2,2)+' cm²';
+  $('pcBaseText').textContent=r.baseToTextMm!==null?fmt(r.baseToTextMm,1)+' mm':'--';
+  $('pcOffset').textContent=r.offsetXmm!==null?fmt(r.offsetXmm,1)+' mm':'--';
+  $('pcTextAngle').textContent=fmt(r.textAngle,1)+'°';
+  $('pcReason').textContent=r.reason || '';
+}
+function renderCounts(c){ $('pcOk').textContent=c.ok||0; $('pcBad').textContent=c.bad||0; $('pcTotal').textContent=c.total||0; }
+function renderLog(counts){
+  if(counts) renderCounts(counts);
+  $('pcLogBody').innerHTML=log.slice(0,100).map(r=>`<tr><td>${r.time}</td><td>${r.result}</td><td>${r.score}</td><td>${r.baseText}</td><td>${r.reason}</td></tr>`).join('');
+}
+function getPCConfig(){ return {
+  validateText:$('pcValidateText').checked,
+  validateSize:$('pcValidateSize').checked,
+  validateShape:$('pcValidateShape').checked,
+  minScore:+$('pcMinScore').value||85,
+  maxErrX:+$('pcMaxErrX').value||3,
+  maxErrY:+$('pcMaxErrY').value||3,
+  maxErrBase:+$('pcMaxErrBase').value||2.5,
+  maxTextAngle:+$('pcMaxTextAngle').value||5,
+  sizeTolPct:+$('pcSizeTolPct').value||5,
+  textZoneStart:+$('pcTextZoneStart').value||62,
+  textZoneEnd:+$('pcTextZoneEnd').value||96
+};}
+function applyConfigToPC(c){ const map={validateText:'pcValidateText',validateSize:'pcValidateSize',validateShape:'pcValidateShape',minScore:'pcMinScore',maxErrX:'pcMaxErrX',maxErrY:'pcMaxErrY',maxErrBase:'pcMaxErrBase',maxTextAngle:'pcMaxTextAngle',sizeTolPct:'pcSizeTolPct',textZoneStart:'pcTextZoneStart',textZoneEnd:'pcTextZoneEnd'}; Object.entries(map).forEach(([k,id])=>{ if(c[k]!==undefined){ if($(id).type==='checkbox') $(id).checked=!!c[k]; else $(id).value=c[k]; } }); }
+function pushConfig(){ send({type:'config',config:getPCConfig()}); }
 
-initMonitor();
-
-function initMonitor(){
-  resizeOverlay(); window.addEventListener('resize', resizeOverlay);
-  if(typeof Peer === 'undefined'){
-    setBadge('peerStatus','PeerJS no cargó','bad');
-    $('appUrl').textContent='No cargó PeerJS. Revisa internet.';
-    return;
-  }
-  peer = new Peer();
-  peer.on('open', id=>{
-    setBadge('peerStatus','QR listo','ok');
-    const appUrl = new URL('./', location.href).href + '?monitor=' + encodeURIComponent(id);
-    $('appUrl').textContent = appUrl;
-    try{ new QRCode($('qrcode'), {text:appUrl, width:240, height:240, correctLevel:QRCode.CorrectLevel.M}); }
-    catch{ $('qrcode').textContent='QR no disponible. Copia la URL.'; }
-  });
-  peer.on('call', call=>{
-    call.answer();
-    call.on('stream', stream=>{
-      remoteVideo.srcObject = stream;
-      setBadge('phoneStatus','Video recibido','ok');
-      remoteVideo.onloadedmetadata=()=>{ remoteVideo.play(); resizeOverlay(); };
-    });
-  });
-  peer.on('connection', conn=>{
-    setBadge('phoneStatus','Celular conectado','ok');
-    conn.on('data', data=>{
-      lastPayload=data;
-      renderPayload(data);
-      drawOverlay(data);
-    });
-    conn.on('close',()=>setBadge('phoneStatus','Celular desconectado','warn'));
-  });
-  peer.on('error', e=>{ console.error(e); setBadge('peerStatus','Error Peer','bad'); $('dataLog').textContent=e.message || String(e); });
-}
-function setBadge(id,text,cls='idle'){ const el=$(id); el.textContent=text; el.className='badge '+cls; }
-function resizeOverlay(){
-  const r=overlay.getBoundingClientRect(); const dpr=window.devicePixelRatio||1;
-  overlay.width=Math.max(1,Math.round(r.width*dpr)); overlay.height=Math.max(1,Math.round(r.height*dpr));
-  ctx.setTransform(dpr,0,0,dpr,0,0); if(lastPayload) drawOverlay(lastPayload);
-}
-function renderPayload(p){
-  $('dataLog').textContent=JSON.stringify(p,null,2);
-  if(p.type!=='analysis') return;
-  $('decision').textContent=p.result || 'ESPERANDO';
-  $('decision').className='decision '+(p.pass?'ok':p.result==='RECHAZADO'?'bad':'neutral');
-  $('reason').textContent=p.reason || '';
-  $('mAlign').textContent=p.text?.alignmentScore!=null ? `${p.text.alignmentScore}%` : '--';
-  $('mSize').textContent=p.patch ? `${p.patch.widthCm.toFixed(2)} × ${p.patch.heightCm.toFixed(2)} cm` : '--';
-  $('mPerimeter').textContent=p.patch ? `${p.patch.perimeterCm.toFixed(2)} cm` : '--';
-  $('mArea').textContent=p.patch ? `${p.patch.areaCm2.toFixed(2)} cm²` : '--';
-  $('mOffset').textContent=p.text?.offsetMm!=null ? `${p.text.offsetMm.toFixed(1)} mm` : '--';
-  $('mAngle').textContent=p.text?.angleDeg!=null ? `${p.text.angleDeg.toFixed(1)}°` : '--';
-}
-function drawOverlay(p){
-  const cw=overlay.clientWidth, ch=overlay.clientHeight; ctx.clearRect(0,0,cw,ch);
-  if(!p?.imageSize || !p?.shapes) return;
-  const fit=containFit(p.imageSize.w,p.imageSize.h,cw,ch);
-  ctx.save(); ctx.translate(fit.x,fit.y); ctx.scale(fit.s,fit.s);
-  p.shapes.forEach(s=>drawShape(ctx,s));
-  ctx.restore();
-}
-function containFit(iw,ih,cw,ch){ const s=Math.min(cw/iw,ch/ih); return {s,x:(cw-iw*s)/2,y:(ch-ih*s)/2}; }
-function drawShape(ctx,s){
-  const scale=ctx.getTransform?.().a || 1; ctx.lineWidth=3/scale; ctx.strokeStyle=s.color||'#24d18f'; ctx.fillStyle=s.color||'#24d18f'; ctx.font=`${15/scale}px system-ui`;
-  if(s.type==='poly' && s.pts?.length){ ctx.beginPath(); s.pts.forEach((p,i)=>i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y)); ctx.closePath(); ctx.stroke(); if(s.label) ctx.fillText(s.label,s.pts[0].x+5,s.pts[0].y-7); }
-  if(s.type==='point'){ ctx.beginPath(); ctx.arc(s.x,s.y,6,0,Math.PI*2); ctx.fill(); if(s.label) ctx.fillText(s.label,s.x+8,s.y-8); }
-  if(s.type==='cross'){ const r=12; ctx.beginPath(); ctx.moveTo(s.x-r,s.y); ctx.lineTo(s.x+r,s.y); ctx.moveTo(s.x,s.y-r); ctx.lineTo(s.x,s.y+r); ctx.stroke(); if(s.label) ctx.fillText(s.label,s.x+8,s.y-8); }
-  if(s.type==='line'){ ctx.beginPath(); ctx.moveTo(s.x1,s.y1); ctx.lineTo(s.x2,s.y2); ctx.stroke(); if(s.label) ctx.fillText(s.label,s.x1+5,s.y1-7); }
-}
+document.querySelectorAll('[data-cmd]').forEach(btn=>btn.addEventListener('click',()=>cmd(btn.dataset.cmd)));
+$('btnPushConfig').onclick=pushConfig;
+$('btnNewCode').onclick=()=>startPeer(generateCode());
+$('btnCopyCode').onclick=async()=>{ try{ await navigator.clipboard.writeText(currentCode); toast('Código copiado'); }catch(e){ toast('No pude copiar. Código: '+currentCode); } };
+['pcValidateText','pcValidateSize','pcValidateShape','pcMinScore','pcMaxErrX','pcMaxErrY','pcMaxErrBase','pcMaxTextAngle','pcSizeTolPct','pcTextZoneStart','pcTextZoneEnd'].forEach(id=>$(id).addEventListener('change',()=>pushConfig()));
+startPeer();
