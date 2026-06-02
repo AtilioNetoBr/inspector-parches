@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#08111f" />
+  <title>Inspector de Parches Pro | Mardur</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="app-header">
+    <div>
+      <p class="eyebrow">Control visual textil</p>
+      <h1>Inspector de Parches Pro</h1>
+      <p class="subtitle">Medición con celular, bloqueo anti-duplicado, maestro visual y exportación por lote.</p>
+    </div>
+    <div class="header-actions">
+      <span id="cvBadge" class="badge warn">Cargando OpenCV</span>
+      <span id="cameraBadge" class="badge idle">Sin cámara</span>
+    </div>
+  </header>
+
+  <main class="layout">
+    <section class="card camera-card">
+      <div class="toolbar top-toolbar">
+        <button id="btnStart" class="primary">Iniciar cámara</button>
+        <button id="btnCalibrate" class="secondary">Calibrar escala</button>
+        <button id="btnMeasure">Medir y registrar</button>
+        <button id="btnAuto" data-active="false">Auto: OFF</button>
+      </div>
+
+      <div class="video-stage" id="videoStage">
+        <video id="video" playsinline autoplay muted></video>
+        <canvas id="overlay"></canvas>
+        <canvas id="captureCanvas" hidden></canvas>
+        <div id="guideBox" class="guide-box">
+          <span>zona recomendada</span>
+        </div>
+      </div>
+
+      <div class="status-line">
+        <strong id="workState">Listo para iniciar</strong>
+        <span id="workHint">Usa fondo sólido mate y celular fijo. La app no adivina geometría por inspiración divina.</span>
+      </div>
+
+      <div class="toolbar">
+        <button id="btnSaveMaster">Guardar maestro visual</button>
+        <button id="btnClearMaster" class="danger-soft">Borrar maestro</button>
+        <button id="btnSnapshot">Descargar foto actual</button>
+      </div>
+    </section>
+
+    <aside class="side-panel">
+      <section class="card result-card">
+        <h2>Resultado</h2>
+        <div id="decision" class="decision neutral">ESPERANDO</div>
+        <p id="reason" class="reason">Inicia cámara, calibra escala y coloca el parche completo en cuadro.</p>
+        <div class="metrics">
+          <div><span>Ancho</span><strong id="mWidth">--</strong></div>
+          <div><span>Alto</span><strong id="mHeight">--</strong></div>
+          <div><span>Giro</span><strong id="mAngle">--</strong></div>
+          <div><span>Área</span><strong id="mArea">--</strong></div>
+          <div><span>Visual maestro</span><strong id="mVisual">--</strong></div>
+          <div><span>Contorno maestro</span><strong id="mShape">--</strong></div>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="section-title">
+          <h2>Configuración</h2>
+          <button id="btnSaveConfig" class="small-btn">Guardar</button>
+        </div>
+        <label>Lote / referencia
+          <input id="lotName" value="Hidalgo" />
+        </label>
+        <div class="grid2">
+          <label>Ancho objetivo mm
+            <input id="targetW" type="number" value="65" step="0.1" />
+          </label>
+          <label>Alto objetivo mm
+            <input id="targetH" type="number" value="73" step="0.1" />
+          </label>
+          <label>Tolerancia ancho ±mm
+            <input id="tolW" type="number" value="1.5" step="0.1" />
+          </label>
+          <label>Tolerancia alto ±mm
+            <input id="tolH" type="number" value="1.5" step="0.1" />
+          </label>
+          <label>Giro máximo °
+            <input id="tolAngle" type="number" value="22" step="0.5" />
+          </label>
+          <label>Referencia mm
+            <input id="refMm" type="number" value="50" step="1" />
+          </label>
+          <label>Área mínima % imagen
+            <input id="minAreaPct" type="number" value="0.35" step="0.05" />
+          </label>
+          <label>Auto: espera ms
+            <input id="autoDelay" type="number" value="850" step="50" />
+          </label>
+          <label>Visual mínimo %
+            <input id="visualMin" type="number" value="68" step="1" />
+          </label>
+          <label>Contorno mínimo %
+            <input id="shapeMin" type="number" value="72" step="1" />
+          </label>
+        </div>
+        <label class="check-row">
+          <input id="useMaster" type="checkbox" checked /> Usar maestro visual cuando exista
+        </label>
+        <p id="scaleText" class="small">Escala: no calibrada.</p>
+        <p id="masterText" class="small">Maestro: no guardado.</p>
+        <a href="plantilla_calibracion.html" target="_blank" class="print-link">Abrir plantilla imprimible de calibración</a>
+      </section>
+
+      <section class="card">
+        <h2>Conteo del lote</h2>
+        <div class="counter">
+          <div><span>Aprobados</span><strong id="okCount">0</strong></div>
+          <div><span>Rechazados</span><strong id="badCount">0</strong></div>
+          <div><span>Total</span><strong id="totalCount">0</strong></div>
+          <div><span>% OK</span><strong id="okPct">--</strong></div>
+        </div>
+        <div class="toolbar stack">
+          <button id="btnExport">Exportar CSV</button>
+          <button id="btnReset" class="danger">Reiniciar conteo</button>
+        </div>
+      </section>
+    </aside>
+  </main>
+
+  <section class="card log-card">
+    <div class="section-title">
+      <h2>Historial</h2>
+      <span id="logInfo" class="small">Últimas 800 mediciones guardadas en este navegador.</span>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Hora</th><th>Lote</th><th>Resultado</th><th>Ancho</th><th>Alto</th><th>Giro</th><th>Visual</th><th>Contorno</th><th>Motivo</th>
+          </tr>
+        </thead>
+        <tbody id="logBody"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <div id="toast" class="toast"></div>
+
+  <script>
+    window.Module = {
+      onRuntimeInitialized() {
+        window.cvReady = true;
+        window.dispatchEvent(new Event('opencv-ready'));
+      }
+    };
+  </script>
+  <script async src="https://docs.opencv.org/4.x/opencv.js"></script>
+  <script src="app.js" defer></script>
+</body>
+</html>
