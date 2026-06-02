@@ -3,23 +3,28 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Plantilla 5 x 5 cm</title>
+<title>Plantilla tarjeta 7×7 / negro 5×5</title>
 <style>
-  @page{size:letter;margin:18mm}
-  body{font-family:Arial, sans-serif;color:#111;margin:0;padding:20px;background:white}
-  .sheet{display:grid;gap:20px;justify-items:center}
-  h1{font-size:18px;margin:0}.note{font-size:12px;text-align:center;max-width:520px;line-height:1.35}.card{width:70mm;height:70mm;border:0.35mm solid #111;display:grid;place-items:center;background:#fff}.square{width:50mm;height:50mm;background:#000}.ruler{display:flex;gap:10px;align-items:center;font-size:12px}.line{width:50mm;border-top:0.4mm solid #111}.print{margin-top:20px;padding:10px 14px;border:1px solid #111;background:#f3f3f3;border-radius:8px}.warn{font-weight:bold}
-  @media print{.print{display:none}}
+  @page { size: letter; margin: 1.5cm; }
+  body{font-family:Arial,sans-serif;color:#111;margin:0;padding:24px;background:white}
+  h1{font-size:20px;margin:0 0 8px} p{font-size:13px;margin:4px 0 16px}.wrap{display:flex;gap:24px;align-items:flex-start;flex-wrap:wrap}.card{width:7cm;height:7cm;background:#fff;border:1px dashed #555;position:relative;box-shadow:0 0 0 1px #ddd inset}.inner{width:5cm;height:5cm;background:#000;position:absolute;left:1cm;top:1cm}.note{max-width:520px}.line{width:7cm;border-top:1px solid #111;margin-top:18px;text-align:center;font-size:11px;padding-top:4px}.print{margin-top:20px}.print button{padding:10px 14px;font-weight:bold} @media print{.print{display:none} body{padding:0}.card{box-shadow:none}}
 </style>
 </head>
 <body>
-<div class="sheet">
-  <h1>Plantilla de calibración 5 x 5 cm</h1>
-  <p class="note">Imprimir al 100%, sin “ajustar a página”. Verificar con regla física que el cuadro negro mida exactamente 50 mm por 50 mm. Si la impresora escala, todo el sistema miente con mucha seguridad, que es la peor forma de mentir.</p>
-  <div class="card"><div class="square"></div></div>
-  <div class="ruler"><span>Control:</span><div class="line"></div><span>50 mm</span></div>
-  <p class="note warn">Para calibrar: coloca esta tarjeta plana sobre la misma mesa donde irá el parche. Luego retírala sin mover el celular.</p>
-  <button class="print" onclick="window.print()">Imprimir plantilla</button>
-</div>
+  <h1>Tarjeta de calibración 7×7 / 5×5</h1>
+  <p>Exterior blanco: 7 × 7 cm. Interior negro: 5 × 5 cm. Margen blanco: 1 cm por lado.</p>
+  <div class="wrap">
+    <div>
+      <div class="card"><div class="inner"></div></div>
+      <div class="line">Verifica con regla: exterior 7 cm</div>
+    </div>
+    <div class="note">
+      <strong>Instrucciones</strong>
+      <p>Imprime al 100%, sin ajustar a página. Recorta por la línea exterior de 7×7 cm si quieres usarla como tarjeta rígida.</p>
+      <p>Para calibrar: coloca esta tarjeta plana en la misma zona donde colocarás el parche, presiona “Calibrar tarjeta 7×7 / 5×5” y luego retírala sin mover el celular.</p>
+      <p>Si la impresión no mide exactamente 7 cm exterior y 5 cm interior, no la uses. Sí, hasta una impresora puede sabotear calidad industrial. Qué sorpresa.</p>
+    </div>
+  </div>
+  <div class="print"><button onclick="window.print()">Imprimir plantilla</button></div>
 </body>
 </html>

@@ -3,155 +3,151 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <meta name="theme-color" content="#07101f" />
-  <title>Inspector de Parches Pro v7 | Mardur</title>
+  <title>Inspector de Parches Pro v8</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-  <header class="app-header">
+  <header class="topbar">
     <div>
-      <h1>Inspector de Parches Pro v7</h1>
-      <p>Calibración 5×5, perímetro, tamaño real y centrado de texto contra bordes.</p>
+      <h1>Inspector de Parches Pro v8</h1>
+      <p>Tarjeta 7×7 / negro 5×5, silueta, perímetro y alineación de texto.</p>
     </div>
-    <div class="header-actions">
+    <div class="badges">
+      <span id="cvBadge" class="badge warn">OpenCV cargando</span>
       <span id="statusBadge" class="badge idle">Sin cámara</span>
-      <span id="calibBadge" class="badge idle">Sin calibrar</span>
     </div>
   </header>
 
   <main class="layout">
-    <section class="camera-panel card">
-      <div class="stepbar">
-        <div id="stepCamera" class="step active"><b>1</b><span>Cámara</span></div>
-        <div id="stepCalib" class="step"><b>2</b><span>5×5</span></div>
-        <div id="stepRef" class="step"><b>3</b><span>Referencia</span></div>
-        <div id="stepAudit" class="step"><b>4</b><span>Auditar</span></div>
-      </div>
-
+    <section class="panel camera-card">
       <div class="video-wrap">
         <video id="video" playsinline autoplay muted></video>
         <canvas id="overlay"></canvas>
         <canvas id="captureCanvas" hidden></canvas>
-        <div id="centerGuide" class="center-guide"></div>
+        <div id="guide" class="guide">
+          <span>Zona de trabajo</span>
+        </div>
       </div>
 
-      <div class="controls">
+      <div class="toolbar">
         <button id="btnStart" class="primary">1. Iniciar cámara</button>
-        <button id="btnCalibAuto" class="secondary">2A. Detectar 5×5 auto</button>
-        <button id="btnCalibManual" class="secondary strong">2B. Calibrar 4 esquinas</button>
+        <button id="btnCalibrate" class="accent">2. Calibrar tarjeta 7×7 / 5×5</button>
         <button id="btnReference">3. Tomar referencia aprobada</button>
         <button id="btnMeasure">Medir ahora</button>
         <button id="btnAuto" data-active="false">Auto: OFF</button>
       </div>
 
-      <div class="instructions" id="instructions">
-        <strong>Flujo recomendado:</strong> inicia cámara, coloca el cuadro negro 5×5 sobre la tarjeta blanca, calibra, retira el cuadro sin mover el celular, toma una pieza buena como referencia y audita.
-      </div>
-
-      <div class="monitor-box">
-        <label>Monitor en PC
-          <input id="monitorId" placeholder="Pega aquí el ID que aparece en monitor.html" />
-        </label>
-        <button id="btnConnectMonitor">Transmitir a PC</button>
-        <span id="monitorStatus" class="small">Sin monitor conectado.</span>
+      <div class="stepbox">
+        <strong>Flujo correcto:</strong>
+        <span>Calibra con la tarjeta en la misma zona donde irá el parche. Luego retírala sin mover el celular. Después toma referencia y audita.</span>
       </div>
     </section>
 
-    <aside class="side-panel">
-      <section class="card result-card">
+    <aside class="side">
+      <section class="panel result-panel">
         <h2>Resultado</h2>
         <div id="decision" class="decision neutral">ESPERANDO</div>
-        <p id="reason" class="reason">Inicia cámara y calibra con el cuadro 5×5.</p>
-        <div class="metrics big-metrics">
+        <p id="reason" class="reason">Inicia cámara y calibra con la tarjeta.</p>
+        <div class="score-wrap">
+          <span>Alineación texto</span>
+          <strong id="alignmentScore">--</strong>
+          <div class="meter"><div id="alignmentBar"></div></div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Mediciones</h2>
+        <div class="metrics grid2">
           <div><span>Tamaño</span><strong id="mSize">--</strong></div>
           <div><span>Perímetro</span><strong id="mPerimeter">--</strong></div>
           <div><span>Área</span><strong id="mArea">--</strong></div>
-          <div><span>Giro</span><strong id="mAngle">--</strong></div>
-          <div><span>Texto centro</span><strong id="mTextOffset">--</strong></div>
-          <div><span>Margen izq / der</span><strong id="mTextMargins">--</strong></div>
+          <div><span>Giro parche</span><strong id="mPatchAngle">--</strong></div>
+          <div><span>Texto offset</span><strong id="mTextOffset">--</strong></div>
+          <div><span>Márgenes I/D</span><strong id="mTextMargins">--</strong></div>
+          <div><span>Giro texto</span><strong id="mTextAngle">--</strong></div>
+          <div><span>Confianza</span><strong id="mConfidence">--</strong></div>
         </div>
       </section>
 
-      <section class="card">
-        <h2>Control de criterios</h2>
-        <div class="checks">
-          <label class="check"><input id="critText" type="checkbox" checked /> Rechazar si texto no está centrado</label>
-          <label class="check"><input id="critSize" type="checkbox" /> Rechazar por tamaño vs referencia</label>
-          <label class="check"><input id="critArea" type="checkbox" /> Rechazar por área vs referencia</label>
-          <label class="check"><input id="critPerimeter" type="checkbox" /> Rechazar por perímetro vs referencia</label>
-          <label class="check"><input id="critAngle" type="checkbox" /> Rechazar por giro máximo</label>
-        </div>
-        <div class="grid2">
-          <label>Tolerancia texto ±mm
-            <input id="tolText" type="number" value="2.0" step="0.1" />
-          </label>
-          <label>Tolerancia tamaño %
-            <input id="tolSizePct" type="number" value="3.0" step="0.1" />
-          </label>
-          <label>Tolerancia área %
-            <input id="tolAreaPct" type="number" value="6.0" step="0.1" />
-          </label>
-          <label>Tolerancia perímetro %
-            <input id="tolPerimPct" type="number" value="4.0" step="0.1" />
-          </label>
-          <label>Giro máximo °
-            <input id="tolAngle" type="number" value="25" step="0.5" />
-          </label>
-          <label>Zona texto inicia % alto
-            <input id="textZoneStart" type="number" value="55" min="0" max="95" step="1" />
-          </label>
-          <label>Zona texto termina % alto
-            <input id="textZoneEnd" type="number" value="96" min="5" max="100" step="1" />
-          </label>
-          <label>Ignorar borde lateral %
-            <input id="sideIgnore" type="number" value="4" min="0" max="25" step="1" />
-          </label>
+      <section class="panel">
+        <h2>Estado del sistema</h2>
+        <div class="state-list">
+          <div><span>Tarjeta 7×7/5×5</span><strong id="cardState">No calibrada</strong></div>
+          <div><span>Escala</span><strong id="scaleState">--</strong></div>
+          <div><span>Referencia</span><strong id="refState">No tomada</strong></div>
+          <div><span>Última lectura</span><strong id="lastState">--</strong></div>
         </div>
       </section>
 
-      <section class="card">
-        <h2>Calibración y referencia</h2>
-        <div class="info-grid">
-          <div><span>Escala</span><strong id="scaleText">No calibrada</strong></div>
-          <div><span>Confianza 5×5</span><strong id="calibQuality">--</strong></div>
-          <div><span>Referencia</span><strong id="refText">No tomada</strong></div>
-          <div><span>Última medición</span><strong id="lastText">--</strong></div>
-        </div>
-        <div class="controls stack">
-          <button id="btnClearCalib" class="danger">Borrar calibración</button>
-          <button id="btnClearRef" class="danger">Borrar referencia</button>
+      <section class="panel">
+        <h2>Criterios de rechazo</h2>
+        <label class="check"><input id="critText" type="checkbox" checked /> Rechazar si texto no está alineado</label>
+        <label class="check"><input id="critSize" type="checkbox" /> Rechazar por tamaño vs referencia</label>
+        <label class="check"><input id="critPerimeter" type="checkbox" /> Rechazar por perímetro vs referencia</label>
+        <label class="check"><input id="critArea" type="checkbox" /> Rechazar por área vs referencia</label>
+        <label class="check"><input id="critPatchAngle" type="checkbox" /> Rechazar por giro del parche</label>
+        <div class="grid2 formgrid">
+          <label>Mín. alineación %<input id="minAlignment" type="number" value="85" step="1"></label>
+          <label>Offset máx. texto mm<input id="maxTextOffset" type="number" value="3" step="0.1"></label>
+          <label>Diferencia máx. márgenes mm<input id="maxMarginDiff" type="number" value="4" step="0.1"></label>
+          <label>Giro máx. texto °<input id="maxTextAngle" type="number" value="5" step="0.5"></label>
+          <label>Tolerancia tamaño %<input id="tolSizePct" type="number" value="4" step="0.5"></label>
+          <label>Tolerancia perímetro %<input id="tolPerimPct" type="number" value="5" step="0.5"></label>
+          <label>Tolerancia área %<input id="tolAreaPct" type="number" value="8" step="0.5"></label>
+          <label>Giro máx. parche °<input id="maxPatchAngle" type="number" value="20" step="1"></label>
         </div>
       </section>
 
-      <section class="card">
-        <h2>Vista de confianza</h2>
-        <p class="small">Aquí debe verse el parche enderezado, la línea central del parche y la línea central del texto. Si esto no se ve bien, el rechazo no se debe confiar.</p>
-        <canvas id="debugCanvas"></canvas>
-      </section>
-
-      <section class="card">
-        <h2>Conteo</h2>
-        <div class="counter">
-          <div><span>Aprobados</span><strong id="okCount">0</strong></div>
-          <div><span>Rechazados</span><strong id="badCount">0</strong></div>
-          <div><span>Total</span><strong id="totalCount">0</strong></div>
-          <div><span>% OK</span><strong id="okPct">0%</strong></div>
+      <section class="panel">
+        <h2>Monitor PC</h2>
+        <p class="small">Abre <b>monitor.html</b> en la PC, copia el ID y pégalo aquí.</p>
+        <input id="monitorId" placeholder="ID del monitor" />
+        <div class="toolbar compact">
+          <button id="btnConnectMonitor">Transmitir a PC</button>
+          <button id="btnStopMonitor">Detener</button>
         </div>
-        <div class="controls stack">
-          <button id="btnExport">Exportar CSV</button>
-          <button id="btnReset" class="danger">Reiniciar conteo</button>
-        </div>
+        <p id="monitorState" class="small">Monitor: desconectado.</p>
       </section>
     </aside>
   </main>
 
-  <section class="card log-card">
-    <h2>Historial</h2>
+  <section class="panel debug-panel">
+    <h2>Vista de confianza</h2>
+    <div class="debug-grid">
+      <div>
+        <h3>Tarjeta rectificada</h3>
+        <canvas id="cardCanvas" width="280" height="280"></canvas>
+      </div>
+      <div>
+        <h3>Parche / texto</h3>
+        <canvas id="patchCanvas" width="280" height="280"></canvas>
+      </div>
+      <div>
+        <h3>Silueta</h3>
+        <canvas id="silhouetteCanvas" width="280" height="280"></canvas>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel log-panel">
+    <div class="log-head">
+      <h2>Historial</h2>
+      <div class="toolbar compact">
+        <button id="btnExport">Exportar CSV</button>
+        <button id="btnReset" class="danger">Reiniciar</button>
+      </div>
+    </div>
+    <div class="counter">
+      <div><span>Aprobados</span><strong id="okCount">0</strong></div>
+      <div><span>Rechazados</span><strong id="badCount">0</strong></div>
+      <div><span>Total</span><strong id="totalCount">0</strong></div>
+      <div><span>% OK</span><strong id="okPct">--</strong></div>
+    </div>
     <div class="table-wrap">
       <table>
         <thead>
           <tr>
-            <th>Hora</th><th>Resultado</th><th>Tamaño cm</th><th>Perímetro cm</th><th>Área cm²</th><th>Texto mm</th><th>Motivo</th>
+            <th>Hora</th><th>Resultado</th><th>Tamaño cm</th><th>Perímetro cm</th><th>Área cm²</th><th>Alineación %</th><th>Texto offset</th><th>Motivo</th>
           </tr>
         </thead>
         <tbody id="logBody"></tbody>
@@ -161,8 +157,8 @@
 
   <div id="toast" class="toast"></div>
 
-  <script async src="https://docs.opencv.org/4.x/opencv.js" onload="window.__opencvReady=true"></script>
   <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+  <script async src="https://docs.opencv.org/4.x/opencv.js" onload="cv['onRuntimeInitialized']=()=>{window.cvReady=true; window.dispatchEvent(new Event('cv-ready'));}"></script>
   <script src="app.js"></script>
 </body>
 </html>

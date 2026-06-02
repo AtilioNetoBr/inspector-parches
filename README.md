@@ -1,79 +1,57 @@
-# Inspector de Parches Pro v7
+# Inspector de Parches Pro v8
 
-Versión enfocada en operación seria:
+Webapp para inspección con celular publicada en GitHub Pages.
 
-- Calibración con cuadro negro de **5 x 5 cm** sobre tarjeta blanca.
-- Opción automática y opción manual de **4 esquinas**.
-- Medición métrica usando homografía: más confiable que solo px/mm.
-- Reporta tamaño real **X x X cm**.
-- Reporta **perímetro de la figura** en cm.
-- Reporta área en cm².
-- Detecta el texto en la zona inferior configurable.
-- Compara el centro del texto contra el centro del parche.
-- Muestra márgenes izquierdo/derecho del texto.
-- Criterios activables: texto, tamaño, área, perímetro y giro.
-- Monitor en PC con `monitor.html`.
-- Exportación CSV.
+## Objetivo
 
-## Archivos
+- Usar una tarjeta fija de calibración: exterior blanco 7 × 7 cm e interior negro 5 × 5 cm.
+- Detectar la tarjeta automáticamente con threshold de blanco, rectificar perspectiva y validar el negro central.
+- Retirar la tarjeta sin mover el celular.
+- Detectar la silueta del parche.
+- Reportar tamaño X × X cm, perímetro, área, giro del parche.
+- Detectar el bloque de texto, medir márgenes izquierdo/derecho y calcular porcentaje de alineación.
+- Transmitir video y resultados a una PC mediante `monitor.html`.
 
-Subir todos estos archivos sueltos a la raíz del repositorio de GitHub Pages:
+## Archivos para GitHub Pages
 
-```text
-index.html
-app.js
-styles.css
-monitor.html
-monitor.js
-plantilla_calibracion.html
-README.md
-```
+Subir estos archivos sueltos a la raíz del repositorio:
 
-## Flujo recomendado
+- `index.html`
+- `app.js`
+- `styles.css`
+- `monitor.html`
+- `monitor.js`
+- `plantilla_calibracion.html`
+- `README.md`
 
-1. Abrir la app en el celular desde GitHub Pages.
+## Flujo de uso
+
+1. Abrir la página en el celular.
 2. Presionar **Iniciar cámara**.
-3. Colocar el cuadro negro 5 x 5 cm sobre la tarjeta blanca.
-4. Usar **Calibrar 4 esquinas** como método principal de trabajo serio.
-5. Tocar las cuatro esquinas del cuadro negro.
-6. Retirar el cuadro sin mover el celular.
-7. Colocar un parche aprobado.
-8. Presionar **Tomar referencia aprobada**.
-9. Activar únicamente el criterio **Texto centrado** al inicio.
-10. Auditar.
+3. Colocar la tarjeta 7×7 / 5×5 en la misma zona donde irá el parche.
+4. Presionar **Calibrar tarjeta 7×7 / 5×5**.
+5. Retirar la tarjeta sin mover el celular.
+6. Colocar una pieza buena.
+7. Presionar **Tomar referencia aprobada**.
+8. Dejar activo inicialmente solo: **Rechazar si texto no está alineado**.
+9. Auditar con **Medir ahora** o **Auto: ON**.
 
-## Recomendación inicial de criterios
+## Recomendaciones de piso
 
-- Texto centrado: ON
-- Tamaño vs referencia: OFF
-- Área vs referencia: OFF
-- Perímetro vs referencia: OFF
-- Giro: OFF
-- Tolerancia texto: ±2.0 mm
+- Celular fijo, no en mano.
+- Fondo mate oscuro.
+- Buena luz uniforme.
+- Tarjeta impresa al 100% y verificada con regla.
+- Recalibrar si se mueve el celular, soporte o altura.
 
-Después de validar con piezas buenas y malas conocidas, activar tamaño/perímetro si hace falta.
+## Monitor PC
 
-## Monitor en PC
+Abrir en la PC:
 
-1. En la PC abrir:
+`monitor.html`
 
-```text
-https://TU_USUARIO.github.io/inspector-parches/monitor.html?v=7
-```
+Copiar el ID generado y pegarlo en el celular en la sección Monitor PC.
 
-2. Copiar el ID que aparece.
-3. En el celular pegarlo en el campo Monitor en PC.
-4. Presionar **Transmitir a PC**.
+## Nota técnica importante
 
-## Condiciones físicas
-
-- Celular fijo arriba de la mesa.
-- No mover el celular después de calibrar.
-- Fondo sólido mate.
-- Buena luz sin sombras duras.
-- La tarjeta 5 x 5 debe estar en el mismo plano donde irá el parche.
-- El parche debe verse completo.
-
-## Nota importante
-
-La detección automática del 5 x 5 existe, pero para trabajo serio el método recomendado es **Calibrar 4 esquinas**. No es retroceder: es control metrológico. La app valida tamaño real con esos puntos y evita depender de iluminación caprichosa.
+La tarjeta se usa para calibración. Si se retira, la precisión depende de que el celular quede fijo y de que el parche se mida en la misma zona. Para máxima precisión metrológica, la tarjeta debería poder entrar y salir siempre al mismo plano y posición.
