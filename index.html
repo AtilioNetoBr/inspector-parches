@@ -3,158 +3,139 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <meta name="theme-color" content="#07111f" />
-  <title>Inspector de Parches Móvil v12</title>
+  <title>Inspector de Parches | Base a Texto</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-  <header class="topbar">
+  <header class="app-header">
     <div>
       <h1>Inspector de Parches</h1>
-      <p>Guías permanentes · Referencia 100% · Texto alineado</p>
+      <p>Medición con celular, maestro 100%, distancia Base a Texto y decisión automática.</p>
     </div>
-    <span id="cvState" class="pill warn">Cargando visión…</span>
+    <span id="statusBadge" class="badge idle">Sin cámara</span>
   </header>
 
-  <main class="app">
-    <section class="viewer card">
-      <div class="stage" id="stage">
+  <main class="layout">
+    <section class="camera-panel card">
+      <div class="video-wrap">
         <video id="video" playsinline autoplay muted></video>
         <canvas id="overlay"></canvas>
         <canvas id="captureCanvas" hidden></canvas>
-        <canvas id="debugCanvas" hidden></canvas>
-        <div id="bigDecision" class="big-decision idle">SIN MEDICIÓN</div>
+        <canvas id="patchCanvas" hidden></canvas>
+        <div id="centerGuide" class="center-guide"></div>
       </div>
 
-      <div class="quick-status">
-        <div><span>Cámara</span><strong id="cameraStatus">apagada</strong></div>
-        <div><span>Calibración</span><strong id="calStatus">pendiente</strong></div>
-        <div><span>Referencia</span><strong id="refStatus">pendiente</strong></div>
-        <div><span>Score</span><strong id="scoreStatus">--</strong></div>
+      <div class="controls">
+        <button id="btnStart" class="primary">Iniciar cámara</button>
+        <button id="btnMeasure">Medir ahora</button>
+        <button id="btnAuto" data-active="false">Auto: OFF</button>
+        <button id="btnSaveMaster" class="secondary">Guardar maestro 100%</button>
+        <button id="btnClearMaster" class="danger">Borrar maestro</button>
       </div>
 
-      <div class="actions main-actions">
-        <button id="btnCamera" class="primary">Iniciar cámara</button>
-        <button id="btnSwitchCam">Cambiar cámara</button>
-        <label class="file-btn">Analizar foto
-          <input id="photoInput" type="file" accept="image/*" capture="environment" hidden />
+      <div class="hint">
+        El maestro guardado se vuelve el “marco cero”: 100% para tamaño, área, giro y distancia Base a Texto.
+      </div>
+    </section>
+
+    <aside class="side-panel">
+      <section class="card result-card">
+        <h2>Resultado</h2>
+        <div id="decision" class="decision neutral">ESPERANDO</div>
+        <div class="metrics">
+          <div><span>Ancho</span><strong id="mWidth">--</strong></div>
+          <div><span>Alto</span><strong id="mHeight">--</strong></div>
+          <div><span>Giro</span><strong id="mAngle">--</strong></div>
+          <div><span>Área</span><strong id="mArea">--</strong></div>
+          <div><span>Base a Texto</span><strong id="mBaseText">--</strong></div>
+          <div><span>% vs maestro</span><strong id="mScore">--</strong></div>
+        </div>
+        <p id="reason" class="reason">Inicia la cámara, calibra y guarda un maestro.</p>
+      </section>
+
+      <section class="card">
+        <h2>Maestro 100%</h2>
+        <p id="masterText" class="small">Maestro: no guardado.</p>
+        <div class="master-grid">
+          <div><span>Ancho ref.</span><strong id="refWidth">--</strong></div>
+          <div><span>Alto ref.</span><strong id="refHeight">--</strong></div>
+          <div><span>Base a Texto ref.</span><strong id="refBaseText">--</strong></div>
+          <div><span>Área ref.</span><strong id="refArea">--</strong></div>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Configuración</h2>
+        <label>Lote / referencia
+          <input id="lotName" value="Hidalgo" />
         </label>
-      </div>
-    </section>
-
-    <section class="flow">
-      <article class="card step" id="stepCal">
-        <div class="step-head">
-          <span class="step-num">1</span>
-          <div><h2>Calibrar tarjeta 7×7 / 5×5</h2><p>Coloca la tarjeta blanca 7×7 con negro 5×5. La tarjeta solo calibra escala y perspectiva.</p></div>
-        </div>
-        <div class="actions">
-          <button id="btnCalibrate" class="primary">Detectar tarjeta automáticamente</button>
-          <button id="btnClearCal">Borrar calibración</button>
-        </div>
-        <div class="result-grid">
-          <div><span>Confianza tarjeta</span><strong id="cardConfidence">--</strong></div>
-          <div><span>Interior 5×5</span><strong id="innerStatus">--</strong></div>
-          <div><span>Escala</span><strong id="scaleStatus">--</strong></div>
-          <div><span>Última</span><strong id="calTime">--</strong></div>
-        </div>
-      </article>
-
-      <article class="card step" id="stepRef">
-        <div class="step-head">
-          <span class="step-num">2</span>
-          <div><h2>Tomar referencia 100%</h2><p>Coloca una pieza aprobada. Será el marco cero: 100% en todos los parámetros.</p></div>
-        </div>
-        <div class="actions">
-          <button id="btnReference" class="primary">Tomar referencia 100%</button>
-          <button id="btnClearRef">Borrar referencia</button>
-        </div>
-        <div class="result-grid">
-          <div><span>Base a texto ref.</span><strong id="refBaseText">--</strong></div>
-          <div><span>Texto ref.</span><strong id="refText">--</strong></div>
-          <div><span>Parche ref.</span><strong id="refPatch">--</strong></div>
-          <div><span>Fecha ref.</span><strong id="refTime">--</strong></div>
-        </div>
-      </article>
-
-      <article class="card step" id="stepAudit">
-        <div class="step-head">
-          <span class="step-num">3</span>
-          <div><h2>Auditar</h2><p>El resultado se compara contra la referencia 100%. Las guías se ven siempre en el celular.</p></div>
-        </div>
-        <div class="actions">
-          <button id="btnMeasure" class="primary">Medir ahora</button>
-          <button id="btnAuto" data-active="false">Auto: OFF</button>
-          <button id="btnExport">Exportar CSV</button>
-          <button id="btnReset">Reiniciar conteo</button>
-        </div>
-        <div class="decision-row">
-          <div class="decision-box"><span>Resultado</span><strong id="resultText">--</strong></div>
-          <div class="decision-box"><span>Alineación</span><strong id="alignScore">--</strong></div>
-          <div class="decision-box"><span>Aprobados</span><strong id="okCount">0</strong></div>
-          <div class="decision-box"><span>Rechazados</span><strong id="badCount">0</strong></div>
-        </div>
-      </article>
-
-      <article class="card">
-        <h2>Parámetros de aceptación</h2>
         <div class="grid2">
-          <label>Mínimo aceptable general %
-            <input id="minScore" type="number" value="85" min="0" max="100" step="1" />
+          <label>Ancho objetivo mm
+            <input id="targetW" type="number" value="65" step="0.1" />
           </label>
-          <label>Error horizontal texto máx. mm
-            <input id="maxTextX" type="number" value="3" min="0.1" step="0.1" />
+          <label>Alto objetivo mm
+            <input id="targetH" type="number" value="73" step="0.1" />
           </label>
-          <label>Error vertical texto máx. mm
-            <input id="maxTextY" type="number" value="3" min="0.1" step="0.1" />
+          <label>Tolerancia ancho ±mm
+            <input id="tolW" type="number" value="1.5" step="0.1" />
           </label>
-          <label>Error Base a Texto máx. mm
-            <input id="maxBaseText" type="number" value="2.5" min="0.1" step="0.1" />
+          <label>Tolerancia alto ±mm
+            <input id="tolH" type="number" value="1.5" step="0.1" />
           </label>
-          <label>Ángulo texto máx. °
-            <input id="maxTextAngle" type="number" value="5" min="0.1" step="0.1" />
+          <label>Giro máximo °
+            <input id="tolAngle" type="number" value="18" step="0.5" />
           </label>
-          <label>Diferencia tamaño máx. %
-            <input id="maxSizePct" type="number" value="8" min="0.1" step="0.5" />
+          <label>Referencia mm
+            <input id="refMm" type="number" value="50" step="1" />
+          </label>
+          <label>Aceptación general %
+            <input id="acceptPct" type="number" value="85" min="1" max="100" step="1" />
+          </label>
+          <label>Aceptación Base a Texto %
+            <input id="baseTextAcceptPct" type="number" value="85" min="1" max="100" step="1" />
+          </label>
+          <label>Zona texto inicia % alto
+            <input id="textStartPct" type="number" value="42" min="0" max="95" step="1" />
+          </label>
+          <label>Zona texto termina % alto
+            <input id="textEndPct" type="number" value="92" min="5" max="100" step="1" />
           </label>
         </div>
-        <div class="checks">
-          <label><input id="chkText" type="checkbox" checked /> Validar texto alineado</label>
-          <label><input id="chkBaseText" type="checkbox" checked /> Validar Base a Texto</label>
-          <label><input id="chkSize" type="checkbox" /> Validar tamaño del parche</label>
-          <label><input id="chkShape" type="checkbox" /> Validar área/perímetro</label>
-        </div>
-      </article>
+        <label class="checkline"><input id="useMaster" type="checkbox" checked /> Usar maestro como 100% para aprobación</label>
+        <button id="btnCalibrate" class="secondary">Calibrar escala</button>
+        <p id="scaleText" class="small">Escala: no calibrada.</p>
+      </section>
 
-      <article class="card debug-card">
-        <div class="debug-head">
-          <h2>Diagnóstico visual</h2>
-          <select id="debugMode">
-            <option value="overlay">Overlay normal</option>
-            <option value="cardWarp">Tarjeta corregida</option>
-            <option value="patchWarp">Parche corregido</option>
-            <option value="textMask">Máscara de texto</option>
-          </select>
+      <section class="card">
+        <h2>Conteo</h2>
+        <div class="counter">
+          <div><span>Aprobados</span><strong id="okCount">0</strong></div>
+          <div><span>Rechazados</span><strong id="badCount">0</strong></div>
+          <div><span>Total</span><strong id="totalCount">0</strong></div>
         </div>
-        <canvas id="diagnosticCanvas"></canvas>
-        <p id="reason" class="reason">Inicia cámara. Las guías deben quedar visibles todo el tiempo.</p>
-      </article>
-
-      <article class="card log-card">
-        <h2>Historial</h2>
-        <div class="table-wrap">
-          <table>
-            <thead><tr><th>Hora</th><th>Resultado</th><th>Score</th><th>Base a Texto</th><th>Texto X</th><th>Texto °</th><th>Tamaño</th><th>Motivo</th></tr></thead>
-            <tbody id="logBody"></tbody>
-          </table>
+        <div class="controls stack">
+          <button id="btnExport">Exportar CSV</button>
+          <button id="btnReset" class="danger">Reiniciar conteo</button>
         </div>
-      </article>
-    </section>
+      </section>
+    </aside>
   </main>
+
+  <section class="card log-card">
+    <h2>Historial</h2>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Hora</th><th>Lote</th><th>Resultado</th><th>Ancho</th><th>Alto</th><th>Base-Texto</th><th>%</th><th>Motivo</th></tr>
+        </thead>
+        <tbody id="logBody"></tbody>
+      </table>
+    </div>
+  </section>
 
   <div id="toast" class="toast"></div>
 
-  <script async src="https://docs.opencv.org/4.x/opencv.js" onload="window.cvReady=true; window.dispatchEvent(new Event('opencv-ready'));"></script>
+  <script async src="https://docs.opencv.org/4.x/opencv.js" onload="window.cvReady=true"></script>
   <script src="app.js"></script>
 </body>
 </html>

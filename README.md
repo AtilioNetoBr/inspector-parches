@@ -1,60 +1,33 @@
-# Inspector de Parches Móvil v12
+# Inspector de Parches - Base a Texto
 
-Versión optimizada para celular/iPhone. Esta versión no incluye monitor PC: prioriza que el operador vea guías permanentes directamente en el celular.
+Versión sin monitor y sin QR. Mantiene la lógica original de cámara, calibración por dos puntos, medición por contorno y decisión automática, pero agrega:
 
-## Flujo de uso
+- Maestro 100% como marco cero.
+- Medición de distancia Base a Texto.
+- Porcentaje de similitud contra maestro.
+- Aceptación general editable.
+- Aceptación Base a Texto editable.
+- Líneas visuales: contorno del parche, caja del texto y línea Base a Texto.
 
-1. Abrir `index.html` desde GitHub Pages.
-2. Presionar **Iniciar cámara**.
-3. Colocar la tarjeta blanca **7×7 cm** con interior negro **5×5 cm**.
-4. Presionar **Detectar tarjeta automáticamente**.
-5. Retirar la tarjeta sin mover el celular.
-6. Colocar una pieza aprobada.
-7. Presionar **Tomar referencia 100%**.
-8. Auditar con **Medir ahora** o **Auto: ON**.
+## Flujo recomendado
 
-## Qué mide
+1. Iniciar cámara.
+2. Calibrar escala con una referencia conocida.
+3. Colocar una pieza aprobada.
+4. Presionar **Guardar maestro 100%**.
+5. Auditar piezas con **Medir ahora** o **Auto: ON**.
 
-- Tamaño del parche: ancho × alto en cm.
-- Perímetro del parche.
-- Área del parche.
-- Silueta exterior.
-- Bloque visual del texto, sin OCR.
-- Centro del texto contra la referencia.
-- Ángulo del texto.
-- Distancia **Base a Texto**.
-- Score contra referencia 100%.
+## Definición usada
 
-## Importante
+Distancia Base a Texto = distancia desde el borde inferior del parche/bordado hasta el borde inferior del bloque visual del texto detectado.
 
-La tarjeta de calibración solo sirve para escala/perspectiva. No rechaza piezas.
-
-La referencia 100% define los parámetros buenos:
-- tamaño,
-- silueta,
-- posición del texto,
-- ángulo,
-- Base a Texto.
-
-## Recomendaciones físicas
-
-- Celular fijo en soporte.
-- Fondo mate y contrastante.
-- Luz pareja.
-- Tarjeta impresa al 100%, sin ajustar a página.
-- Tarjeta blanca exterior 7×7 cm, negro interior 5×5 cm, borde blanco de 1 cm por lado.
-- Recalibrar si se mueve el celular.
+El texto no se lee con OCR. Se detecta como bloque gráfico.
 
 ## Archivos para GitHub Pages
 
-Subir a la raíz del repositorio:
+Subir estos archivos sueltos a la raíz del repositorio:
 
 - index.html
 - app.js
 - styles.css
-- plantilla_calibracion.html
 - README.md
-
-Abrir con:
-
-`https://TUUSUARIO.github.io/inspector-parches/?v=12`
