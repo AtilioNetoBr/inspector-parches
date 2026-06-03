@@ -1,34 +1,30 @@
-# Inspector de Parches v11 - Ficha 7x7 / 5x5 + Base a Texto
+# Inspector de Parches v14 Senior - Marco 7x7 / 5x5 geométrico + Base a Texto
 
 Versión sin monitor y sin QR.
 
 ## Mejora principal
 
-La app ya no depende únicamente de calibración manual. Ahora tiene un paso visible para calibrar con ficha:
+Esta versión corrige la lógica de ingeniería:
 
-- Exterior blanco: 7 × 7 cm
-- Interior negro: 5 × 5 cm
-- Borde blanco esperado: 1 cm por lado
-
-La lógica de ficha es:
-
-1. Buscar primero el exterior blanco 7×7.
-2. Detectar sus cuatro esquinas.
-3. Corregir perspectiva.
-4. Validar que el negro 5×5 esté centrado.
-5. Guardar escala px/mm.
-6. Retirar la ficha sin mover el celular.
-7. Colocar el maestro 100%.
+- El threshold se usa para detectar el **exterior blanco 7x7**.
+- El 5x5 **no se mide por threshold**.
+- El 5x5 se proyecta por geometría exacta dentro del 7x7:
+  - Exterior: 70 mm
+  - Interior: 50 mm
+  - Borde: 10 mm por lado
+- El contraste del centro solo valida que realmente hay una zona más oscura.
+- La calibración guarda también homografía imagen → milímetros para medir en el plano real, no solo px/mm.
 
 ## Flujo recomendado
 
 1. Iniciar cámara.
-2. Colocar la ficha 7×7 / 5×5 en la zona de medición.
-3. Presionar **Calibrar ficha 7×7 / 5×5**.
-4. Retirar la ficha sin mover el celular.
-5. Colocar una pieza aprobada.
-6. Presionar **Guardar maestro 100%**.
-7. Medir piezas con **Medir ahora** o **Auto: ON**.
+2. Colocar la ficha/marco 7x7 / 5x5 en la zona de medición.
+3. Presionar **Calibrar marco 7x7 / 5x5**.
+4. Esperar **FICHA OK**.
+5. Retirar la ficha sin mover el celular.
+6. Colocar una pieza aprobada.
+7. Presionar **Guardar maestro 100%**.
+8. Medir piezas con **Medir ahora** o **Auto: ON**.
 
 ## Qué mide
 
@@ -39,10 +35,16 @@ La lógica de ficha es:
 - Distancia Base a Texto.
 - % contra maestro 100%.
 
-## Importante
+## Mejoras técnicas v14
 
-La ficha solo calibra escala. No decide si una pieza está aprobada o rechazada.
-El maestro 100% es el marco cero para aprobar/rechazar.
+- Detector de ficha por jerarquía de contornos para priorizar marco exterior.
+- 5x5 dibujado por geometría exacta, no por detección de manchas.
+- Validación de contraste centro/borde.
+- Overlay corregido con `object-fit: contain` para que las líneas no se desplacen.
+- Detección de parche priorizando máscara de objeto claro sobre fondo oscuro.
+- Canny queda solo como respaldo, no como método principal.
+- Medición de parche usando homografía cuando existe calibración de ficha.
+- Base a Texto calculada con escala vertical real del parche enderezado.
 
 ## Archivos a subir a GitHub
 
@@ -55,4 +57,4 @@ Subir sueltos en la raíz del repositorio:
 
 Abrir con:
 
-https://atilionetobr.github.io/inspector-parches/?v=11
+https://atilionetobr.github.io/inspector-parches/?v=14
