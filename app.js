@@ -12,6 +12,7 @@ let lastAutoTs = 0;
 let pxPerMm = Number(localStorage.getItem('pxPerMm') || 0);
 let log = safeJson(localStorage.getItem('inspectionLog'), []);
 let master = safeJson(localStorage.getItem('masterPatchMetrics'), null);
+let cardCalibration = safeJson(localStorage.getItem('cardCalibration7x7'), null);
 
 function safeJson(txt, fallback){ try { return txt ? JSON.parse(txt) : fallback; } catch { return fallback; } }
 function toast(msg){ const t=$('toast'); t.textContent=msg; t.classList.add('show'); setTimeout(()=>t.classList.remove('show'),1800); }
@@ -31,7 +32,7 @@ function cfg(){ return {
   useMaster:$('useMaster').checked
 };}
 function clamp(v,min,max){ return Math.max(min, Math.min(max, v)); }
-function updateScaleText(){ $('scaleText').textContent = pxPerMm ? `Escala: ${pxPerMm.toFixed(3)} px/mm guardada.` : 'Escala: no calibrada.'; }
+function updateScaleText(){ $('scaleText').textContent = pxPerMm ? `Escala: ${pxPerMm.toFixed(3)} px/mm guardada.` : 'Escala: no calibrada. Recomendado: calibrar con ficha 7×7 / 5×5.'; }
 function updateMasterText(){
   if(!master){
     $('masterText').textContent='Maestro: no guardado.';
@@ -45,6 +46,22 @@ function updateMasterText(){
   $('refArea').textContent = `${fmt(master.areaMm,0)} mm²`;
 }
 updateScaleText(); updateMasterText();
+
+function updateCardText(){
+  if(!cardCalibration){
+    $('cardState').textContent='No calibrada';
+    $('cardConfidence').textContent='--';
+    $('cardInner').textContent='--';
+    $('cardScale').textContent='--';
+    return;
+  }
+  $('cardState').textContent='Calibrada';
+  $('cardConfidence').textContent=`${fmt(cardCalibration.confidence,0)}%`;
+  $('cardInner').textContent=`${fmt(cardCalibration.innerWidthMm,1)} × ${fmt(cardCalibration.innerHeightMm,1)} mm`;
+  $('cardScale').textContent=`${fmt(cardCalibration.pxPerMm,3)} px/mm`;
+}
+updateCardText();
+
 
 async function startCamera(){
   try{
@@ -212,7 +229,155 @@ function addLog(res){ const c=cfg(); const row={time:new Date().toLocaleString()
 function renderLog(){ $('logBody').innerHTML=log.map(r=>`<tr><td>${r.time}</td><td>${r.lot}</td><td>${r.result}</td><td>${r.width}</td><td>${r.height}</td><td>${r.baseText||''}</td><td>${r.score||''}</td><td>${escapeHtml(r.reason)}</td></tr>`).join(''); const ok=log.filter(r=>r.result==='APROBADO').length, bad=log.length-ok; $('okCount').textContent=ok; $('badCount').textContent=bad; $('totalCount').textContent=log.length; }
 renderLog();
 
+
 function loop(){ if(!stream) return; if(autoMode && Date.now()-lastAutoTs>850){ const r=analyzeFrame(false); if(r && pxPerMm){ lastAutoTs=Date.now(); addLog(r); } } requestAnimationFrame(loop); }
+
+function calibrateCardAuto(){
+  if(!window.cvReady || typeof cv === 'undefined'){ toast('OpenCV aún está cargando. Espera unos segundos.'); return null; }
+  if(!grabFrame()){ toast('No hay imagen. Inicia cámara primero.'); return null; }
+  let src=cv.imread(capture);
+  try{
+    const det = detectCard7x7(src);
+    if(!det || det.confidence < 72){
+      setDecision(null, det ? `Ficha débil: ${det.confidence.toFixed(0)}%. Centra la ficha, mejora luz y evita sombras.` : 'No encontré ficha 7×7 / 5×5.');
+      if(det) drawCardCalibration(det, false);
+      toast('No calibré: ficha no confiable');
+      return null;
+    }
+    pxPerMm = det.pxPerMm;
+    localStorage.setItem('pxPerMm', pxPerMm);
+    cardCalibration = {
+      savedAt:new Date().toISOString(),
+      pxPerMm:det.pxPerMm,
+      confidence:det.confidence,
+      innerWidthMm:det.innerWidthMm,
+      innerHeightMm:det.innerHeightMm,
+      threshold:det.threshold
+    };
+    localStorage.setItem('cardCalibration7x7', JSON.stringify(cardCalibration));
+    updateScaleText(); updateCardText();
+    drawCardCalibration(det, true);
+    setDecision(null, `Ficha calibrada ${det.confidence.toFixed(0)}%. Retira la ficha sin mover el celular y coloca el maestro 100%.`);
+    toast('Ficha 7×7 / 5×5 calibrada');
+    return det;
+  }catch(e){ console.error(e); toast('Error calibrando ficha'); }
+  finally{ src.delete(); }
+  return null;
+}
+
+function detectCard7x7(src){
+  let gray=new cv.Mat(), blur=new cv.Mat();
+  let best=null;
+  try{
+    cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+    cv.GaussianBlur(gray, blur, new cv.Size(5,5), 0);
+    const thresholds=[125,140,155,170,185,200,215,230];
+    for(const t of thresholds){
+      let mask=new cv.Mat(), clean=new cv.Mat(), contours=new cv.MatVector(), hierarchy=new cv.Mat();
+      try{
+        cv.threshold(blur, mask, t, 255, cv.THRESH_BINARY);
+        const kClose=cv.Mat.ones(9,9,cv.CV_8U);
+        const kOpen=cv.Mat.ones(3,3,cv.CV_8U);
+        cv.morphologyEx(mask, clean, cv.MORPH_CLOSE, kClose);
+        cv.morphologyEx(clean, clean, cv.MORPH_OPEN, kOpen);
+        kClose.delete(); kOpen.delete();
+        cv.findContours(clean, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+        for(let i=0;i<contours.size();i++){
+          const cont=contours.get(i);
+          const cand=scoreCardCandidate7x7(cont, src, t);
+          if(cand && (!best || cand.score > best.score)) best=cand;
+          cont.delete();
+        }
+      }finally{ mask.delete(); clean.delete(); contours.delete(); hierarchy.delete(); }
+    }
+  }finally{ gray.delete(); blur.delete(); }
+  return best;
+}
+
+function scoreCardCandidate7x7(cont, src, threshold){
+  const imgArea=src.cols*src.rows;
+  const area=cv.contourArea(cont);
+  if(area < imgArea*0.015 || area > imgArea*0.80) return null;
+  const peri=cv.arcLength(cont, true);
+  let approx=new cv.Mat();
+  let pts=null;
+  try{
+    for(const eps of [0.015,0.02,0.028,0.04,0.055]){
+      cv.approxPolyDP(cont, approx, eps*peri, true);
+      if(approx.rows===4 && cv.isContourConvex(approx)){ pts=matToPoints(approx); break; }
+    }
+    if(!pts){
+      const rect=cv.minAreaRect(cont);
+      pts=cv.RotatedRect.points(rect).map(p=>({x:p.x,y:p.y}));
+    }
+  }finally{ approx.delete(); }
+  if(!pts || pts.length!==4) return null;
+  const quad=orderQuad(pts);
+  const sides=[dist(quad[0],quad[1]),dist(quad[1],quad[2]),dist(quad[2],quad[3]),dist(quad[3],quad[0])];
+  const minSide=Math.min(...sides), maxSide=Math.max(...sides);
+  if(minSide < 40 || maxSide/minSide > 2.25) return null;
+  const center={x:(quad[0].x+quad[1].x+quad[2].x+quad[3].x)/4,y:(quad[0].y+quad[1].y+quad[2].y+quad[3].y)/4};
+  const centerScore=1-clamp(Math.hypot(center.x-src.cols/2,center.y-src.rows/2)/Math.hypot(src.cols/2,src.rows/2),0,1);
+  let warped=null;
+  try{
+    warped=warpQuad(src, quad, 700, 700);
+    const v=validateWarpedCard7x7(warped);
+    const sizeScore=clamp(Math.sqrt(area/imgArea)*4,0,1);
+    const shapeScore=clamp(minSide/maxSide,0,1);
+    const confidence=clamp(v.score*70 + shapeScore*15 + centerScore*8 + sizeScore*7,0,100);
+    const avgSide=(sides[0]+sides[1]+sides[2]+sides[3])/4;
+    const pxPerMm=avgSide/70;
+    const innerPoly = projectWarpBoxToOriginal({x:100,y:100,w:500,h:500}, quad, 700, 700);
+    return {score:confidence, confidence, quad, innerPoly, center, pxPerMm, threshold, innerWidthMm:v.innerWidthPx/10, innerHeightMm:v.innerHeightPx/10, borderMean:v.borderMean, innerMean:v.innerMean};
+  }finally{ if(warped) warped.delete(); }
+}
+
+function validateWarpedCard7x7(warped){
+  let gray=new cv.Mat(), search=null, black=new cv.Mat(), contours=new cv.MatVector(), hierarchy=new cv.Mat();
+  try{
+    cv.cvtColor(warped, gray, cv.COLOR_RGBA2GRAY);
+    const inner = gray.roi(new cv.Rect(120,120,460,460));
+    const top = gray.roi(new cv.Rect(90,25,520,50));
+    const bottom = gray.roi(new cv.Rect(90,625,520,50));
+    const left = gray.roi(new cv.Rect(25,90,50,520));
+    const right = gray.roi(new cv.Rect(625,90,50,520));
+    const innerMean=cv.mean(inner)[0];
+    const borderMean=(cv.mean(top)[0]+cv.mean(bottom)[0]+cv.mean(left)[0]+cv.mean(right)[0])/4;
+    inner.delete(); top.delete(); bottom.delete(); left.delete(); right.delete();
+    search = gray.roi(new cv.Rect(70,70,560,560));
+    const threshold=Math.max(45, Math.min(180, (innerMean+borderMean)/2));
+    cv.threshold(search, black, threshold, 255, cv.THRESH_BINARY_INV);
+    const k=cv.Mat.ones(5,5,cv.CV_8U);
+    cv.morphologyEx(black, black, cv.MORPH_CLOSE, k); k.delete();
+    cv.findContours(black, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+    let bestArea=0, bestRect=null;
+    for(let i=0;i<contours.size();i++){
+      const c=contours.get(i); const area=cv.contourArea(c); const r=cv.boundingRect(c); c.delete();
+      if(area>bestArea){ bestArea=area; bestRect=r; }
+    }
+    const rectW=bestRect?bestRect.width:0, rectH=bestRect?bestRect.height:0;
+    const cx=bestRect?70+bestRect.x+bestRect.width/2:0, cy=bestRect?70+bestRect.y+bestRect.height/2:0;
+    const contrast=borderMean-innerMean;
+    const contrastScore=clamp(contrast/110,0,1);
+    const sizeScore=bestRect?clamp(1-(Math.abs(rectW-500)+Math.abs(rectH-500))/520,0,1):0;
+    const centerScore=bestRect?clamp(1-(Math.abs(cx-350)+Math.abs(cy-350))/250,0,1):0;
+    const areaScore=clamp(1-Math.abs((bestArea/(500*500))-1),0,1);
+    const score=(contrastScore*.40 + sizeScore*.32 + centerScore*.18 + areaScore*.10);
+    return {score, innerMean, borderMean, innerWidthPx:rectW, innerHeightPx:rectH};
+  }finally{ gray.delete(); if(search) search.delete(); black.delete(); contours.delete(); hierarchy.delete(); }
+}
+
+function drawCardCalibration(det, good){
+  ctx.clearRect(0,0,overlay.width,overlay.height);
+  const sx=overlay.clientWidth/capture.width, sy=overlay.clientHeight/capture.height;
+  ctx.lineWidth=4; ctx.strokeStyle=good?'#1fd18a':'#ff4d5e'; ctx.fillStyle=ctx.strokeStyle; ctx.font='16px system-ui';
+  if(det.quad){ ctx.beginPath(); det.quad.forEach((p,i)=>{ const x=p.x*sx,y=p.y*sy; i?ctx.lineTo(x,y):ctx.moveTo(x,y); }); ctx.closePath(); ctx.stroke(); }
+  if(det.innerPoly){ ctx.strokeStyle='#ffd166'; ctx.beginPath(); det.innerPoly.forEach((p,i)=>{ const x=p.x*sx,y=p.y*sy; i?ctx.lineTo(x,y):ctx.moveTo(x,y); }); ctx.closePath(); ctx.stroke(); }
+  ctx.fillStyle=good?'#1fd18a':'#ff4d5e';
+  ctx.fillText(good?`FICHA OK ${det.confidence.toFixed(0)}%`:`FICHA DÉBIL ${det.confidence.toFixed(0)}%`,18,30);
+  ctx.fillText(`Negro: ${det.innerWidthMm.toFixed(1)} × ${det.innerHeightMm.toFixed(1)} mm`,18,55);
+}
+
 function calibrate(){ const ref=cfg().refMm; if(!grabFrame()) return; toast('Toca 2 puntos de la referencia en pantalla');
   const pts=[]; const onClick=(ev)=>{ const rect=overlay.getBoundingClientRect(); const x=(ev.clientX-rect.left)*capture.width/rect.width; const y=(ev.clientY-rect.top)*capture.height/rect.height; pts.push({x,y}); ctx.fillStyle='#ffd166'; ctx.beginPath(); ctx.arc(ev.clientX-rect.left,ev.clientY-rect.top,6,0,Math.PI*2); ctx.fill(); if(pts.length===2){ overlay.removeEventListener('click',onClick); const d=Math.hypot(pts[1].x-pts[0].x,pts[1].y-pts[0].y); pxPerMm=d/ref; localStorage.setItem('pxPerMm',pxPerMm); updateScaleText(); toast('Escala calibrada'); } };
   overlay.addEventListener('click',onClick);
@@ -232,6 +397,7 @@ function exportCSV(){ const head='Hora,Lote,Resultado,Ancho,Alto,BaseTexto,Score
 function fmt(n,d=1){ return n==null || !isFinite(n) ? '--' : Number(n).toFixed(d); }
 function escapeHtml(value){ return String(value ?? '').replace(/[&<>"']/g, s=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[s])); }
 function dist(a,b){ return Math.hypot(a.x-b.x,a.y-b.y); }
+function matToPoints(mat){ const data = mat.data32S && mat.data32S.length ? mat.data32S : mat.data32F; const pts=[]; for(let i=0;i<mat.rows;i++){ pts.push({x:data[i*2], y:data[i*2+1]}); } return pts; }
 function orderQuad(pts){
   const p=pts.map(q=>({x:q.x,y:q.y}));
   const sums=p.map(q=>q.x+q.y), diffs=p.map(q=>q.x-q.y);
@@ -270,7 +436,14 @@ function projectWarpLineToOriginal(a,b,ordered,outW,outH){
 }
 function unionBoxes(boxes){ const x1=Math.min(...boxes.map(b=>b.x)), y1=Math.min(...boxes.map(b=>b.y)), x2=Math.max(...boxes.map(b=>b.x+b.w)), y2=Math.max(...boxes.map(b=>b.y+b.h)); return {x:x1,y:y1,w:x2-x1,h:y2-y1}; }
 
-$('btnStart').onclick=startCamera; $('btnMeasure').onclick=()=>analyzeFrame(true); $('btnAuto').onclick=()=>{ autoMode=!autoMode; $('btnAuto').dataset.active=String(autoMode); $('btnAuto').textContent='Auto: '+(autoMode?'ON':'OFF'); toast(autoMode?'Medición automática activa':'Medición automática detenida'); };
-$('btnCalibrate').onclick=calibrate; $('btnExport').onclick=exportCSV; $('btnReset').onclick=()=>{ log=[]; localStorage.removeItem('inspectionLog'); renderLog(); toast('Conteo reiniciado'); };
+$('btnStart').onclick=startCamera;
+$('btnCardCalibrate').onclick=calibrateCardAuto;
+$('btnCardCalibrateSide').onclick=calibrateCardAuto;
+$('btnMeasure').onclick=()=>analyzeFrame(true);
+$('btnAuto').onclick=()=>{ autoMode=!autoMode; $('btnAuto').dataset.active=String(autoMode); $('btnAuto').textContent='Auto: '+(autoMode?'ON':'OFF'); toast(autoMode?'Medición automática activa':'Medición automática detenida'); };
+$('btnCalibrate').onclick=calibrate;
+$('btnExport').onclick=exportCSV;
+$('btnReset').onclick=()=>{ log=[]; localStorage.removeItem('inspectionLog'); renderLog(); toast('Conteo reiniciado'); };
 $('btnSaveMaster').onclick=saveMaster;
 $('btnClearMaster').onclick=()=>{ master=null; localStorage.removeItem('masterPatchMetrics'); updateMasterText(); toast('Maestro borrado'); };
+$('btnClearCard').onclick=()=>{ cardCalibration=null; pxPerMm=0; localStorage.removeItem('cardCalibration7x7'); localStorage.removeItem('pxPerMm'); updateCardText(); updateScaleText(); toast('Ficha y escala borradas'); };

@@ -3,14 +3,14 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <title>Inspector de Parches | Base a Texto</title>
+  <title>Inspector de Parches | Ficha 7x7 / 5x5 + Base a Texto</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
   <header class="app-header">
     <div>
       <h1>Inspector de Parches</h1>
-      <p>Medición con celular, maestro 100%, distancia Base a Texto y decisión automática.</p>
+      <p>Medición con celular, ficha 7×7 / 5×5, maestro 100%, distancia Base a Texto y decisión automática.</p>
     </div>
     <span id="statusBadge" class="badge idle">Sin cámara</span>
   </header>
@@ -27,6 +27,7 @@
 
       <div class="controls">
         <button id="btnStart" class="primary">Iniciar cámara</button>
+        <button id="btnCardCalibrate" class="secondary">1. Calibrar ficha 7×7 / 5×5</button>
         <button id="btnMeasure">Medir ahora</button>
         <button id="btnAuto" data-active="false">Auto: OFF</button>
         <button id="btnSaveMaster" class="secondary">Guardar maestro 100%</button>
@@ -34,7 +35,7 @@
       </div>
 
       <div class="hint">
-        El maestro guardado se vuelve el “marco cero”: 100% para tamaño, área, giro y distancia Base a Texto.
+        Flujo: 1) coloca la ficha blanca 7×7 con negro 5×5 y calibra; 2) retira la ficha sin mover el celular; 3) coloca pieza buena y guarda maestro 100%.
       </div>
     </section>
 
@@ -51,6 +52,21 @@
           <div><span>% vs maestro</span><strong id="mScore">--</strong></div>
         </div>
         <p id="reason" class="reason">Inicia la cámara, calibra y guarda un maestro.</p>
+      </section>
+
+      <section class="card ficha-card">
+        <h2>Ficha de escala 7×7 / 5×5</h2>
+        <p class="small">Primero se busca el exterior blanco 7×7, se corrige perspectiva y se valida el negro 5×5. Esto solo calibra escala; no rechaza piezas.</p>
+        <div class="master-grid">
+          <div><span>Ficha</span><strong id="cardState">No calibrada</strong></div>
+          <div><span>Confianza</span><strong id="cardConfidence">--</strong></div>
+          <div><span>Negro detectado</span><strong id="cardInner">--</strong></div>
+          <div><span>Escala ficha</span><strong id="cardScale">--</strong></div>
+        </div>
+        <div class="controls stack">
+          <button id="btnCardCalibrateSide" class="secondary">Calibrar con ficha 7×7 / 5×5</button>
+          <button id="btnClearCard" class="danger">Borrar ficha/escala</button>
+        </div>
       </section>
 
       <section class="card">
@@ -102,8 +118,8 @@
           </label>
         </div>
         <label class="checkline"><input id="useMaster" type="checkbox" checked /> Usar maestro como 100% para aprobación</label>
-        <button id="btnCalibrate" class="secondary">Calibrar escala</button>
-        <p id="scaleText" class="small">Escala: no calibrada.</p>
+        <button id="btnCalibrate" class="secondary">Calibración manual 2 puntos</button>
+        <p id="scaleText" class="small">Escala: no calibrada. Recomendado: calibrar con ficha 7×7 / 5×5.</p>
       </section>
 
       <section class="card">

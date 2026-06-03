@@ -1,33 +1,58 @@
-# Inspector de Parches - Base a Texto
+# Inspector de Parches v11 - Ficha 7x7 / 5x5 + Base a Texto
 
-Versión sin monitor y sin QR. Mantiene la lógica original de cámara, calibración por dos puntos, medición por contorno y decisión automática, pero agrega:
+Versión sin monitor y sin QR.
 
-- Maestro 100% como marco cero.
-- Medición de distancia Base a Texto.
-- Porcentaje de similitud contra maestro.
-- Aceptación general editable.
-- Aceptación Base a Texto editable.
-- Líneas visuales: contorno del parche, caja del texto y línea Base a Texto.
+## Mejora principal
+
+La app ya no depende únicamente de calibración manual. Ahora tiene un paso visible para calibrar con ficha:
+
+- Exterior blanco: 7 × 7 cm
+- Interior negro: 5 × 5 cm
+- Borde blanco esperado: 1 cm por lado
+
+La lógica de ficha es:
+
+1. Buscar primero el exterior blanco 7×7.
+2. Detectar sus cuatro esquinas.
+3. Corregir perspectiva.
+4. Validar que el negro 5×5 esté centrado.
+5. Guardar escala px/mm.
+6. Retirar la ficha sin mover el celular.
+7. Colocar el maestro 100%.
 
 ## Flujo recomendado
 
 1. Iniciar cámara.
-2. Calibrar escala con una referencia conocida.
-3. Colocar una pieza aprobada.
-4. Presionar **Guardar maestro 100%**.
-5. Auditar piezas con **Medir ahora** o **Auto: ON**.
+2. Colocar la ficha 7×7 / 5×5 en la zona de medición.
+3. Presionar **Calibrar ficha 7×7 / 5×5**.
+4. Retirar la ficha sin mover el celular.
+5. Colocar una pieza aprobada.
+6. Presionar **Guardar maestro 100%**.
+7. Medir piezas con **Medir ahora** o **Auto: ON**.
 
-## Definición usada
+## Qué mide
 
-Distancia Base a Texto = distancia desde el borde inferior del parche/bordado hasta el borde inferior del bloque visual del texto detectado.
+- Ancho.
+- Alto.
+- Giro.
+- Área.
+- Distancia Base a Texto.
+- % contra maestro 100%.
 
-El texto no se lee con OCR. Se detecta como bloque gráfico.
+## Importante
 
-## Archivos para GitHub Pages
+La ficha solo calibra escala. No decide si una pieza está aprobada o rechazada.
+El maestro 100% es el marco cero para aprobar/rechazar.
 
-Subir estos archivos sueltos a la raíz del repositorio:
+## Archivos a subir a GitHub
+
+Subir sueltos en la raíz del repositorio:
 
 - index.html
 - app.js
 - styles.css
 - README.md
+
+Abrir con:
+
+https://atilionetobr.github.io/inspector-parches/?v=11
