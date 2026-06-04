@@ -1,62 +1,86 @@
-# Inspector de Parches v17 - Texto Centrado
+# Inspector de Parches Pro v9
 
-Versión enfocada en el criterio real de calidad:
+Webapp para iPhone + PC orientada a inspección visual de parches/bordados.
 
-1. Texto centrado lo más cercano posible al 100%.
-2. Altura Base a Texto comparada contra la muestra maestra.
+## Qué valida
 
-## Qué conserva
+- Calibración con tarjeta física:
+  - Exterior blanco: 7 × 7 cm
+  - Interior negro: 5 × 5 cm
+- Corrección de perspectiva con la tarjeta.
+- Detección de silueta del parche.
+- Medición real:
+  - Tamaño X × X cm
+  - Perímetro cm
+  - Área cm²
+  - Giro del parche
+- Detección del bloque visual del texto, sin OCR.
+- Alineación del texto:
+  - centro horizontal
+  - posición vertical
+  - ángulo
+- Porcentaje mínimo editable, por default 85%.
+- Monitor PC en vivo por QR con video, líneas y recuadros.
 
-- Detector limpio estilo v9/v16 para encontrar el parche.
-- Ficha 7×7 / 5×5 solo para escala.
-- Maestro 100% para aprender zona, tamaño y Base a Texto.
-- Estado NO_MEDIBLE cuando no encuentra bien parche o texto.
+## Archivos
 
-## Qué cambia
+Sube estos archivos sueltos a la raíz del repositorio de GitHub Pages:
 
-El score ya no trata todo igual. Ahora la decisión se calcula así:
+```text
+index.html
+app.js
+styles.css
+monitor.html
+monitor.js
+plantilla_calibracion.html
+README.md
+```
 
-- Centrado del texto: 70%
-- Base a Texto: 30%
-- Tamaño y área/perímetro: solo si se activan, como secundarios.
+No subas el ZIP y no subas una carpeta envolvente.
 
-## Flujo
+## URL de app
 
-1. Iniciar cámara.
-2. Colocar ficha 7×7 / 5×5.
-3. Calibrar ficha.
-4. Retirar ficha sin mover el celular.
-5. Colocar parche bueno.
-6. Guardar maestro 100%.
-7. Medir piezas.
+```text
+https://TUUSUARIO.github.io/inspector-parches/?v=9
+```
 
-## Configuración recomendada
+## URL de monitor PC
 
-- Aceptación final: 85%
-- Centrado texto: 90%
-- Base-Texto: 85%
-- Error centro 0% mm: 5
-- Margen detector: 8 mm
-- Zona texto inicio: 45%
-- Zona texto fin: 94%
-- Validar tamaño: OFF al inicio
-- Validar área/perímetro: OFF al inicio
+```text
+https://TUUSUARIO.github.io/inspector-parches/monitor.html?v=9
+```
 
-## Cómo interpretar
+## Flujo recomendado
 
-- Centrado texto 100% = centro del bloque de texto coincide con centro del parche.
-- Base a Texto 100% = distancia del borde inferior del parche al borde inferior del texto igual a la maestra.
-- NO_MEDIBLE = no se encontró bien parche o texto; no es rechazo de pieza.
+1. En PC abre `monitor.html`.
+2. Escanea el QR con el iPhone.
+3. En iPhone abre la app.
+4. Presiona **Iniciar cámara**.
+5. En PC debe verse el video.
+6. Coloca la tarjeta blanca 7×7 con negro 5×5.
+7. Presiona **Detectar tarjeta 7×7 / 5×5**.
+8. Retira la tarjeta sin mover el celular.
+9. Coloca un parche bueno.
+10. Presiona **Tomar referencia aprobada**.
+11. Activa **Auto: ON** o usa **Medir ahora**.
 
-## Archivos para GitHub Pages
+## Recomendación física
 
-Subir sueltos a la raíz:
+- iPhone fijo en soporte.
+- Tarjeta y parches en el mismo plano.
+- Fondo mate, sin brillos.
+- Luz pareja.
+- Tarjeta impresa al 100%, no ajustada a página.
+- Si el celular se mueve, recalibrar.
 
-- index.html
-- app.js
-- styles.css
-- README.md
+## Si iPhone no abre cámara
 
-Abrir con:
+1. Abrir desde GitHub Pages, no desde github.com.
+2. Revisar que la URL empiece con `https://`.
+3. Safari → Configuración del sitio web → Cámara → Permitir.
+4. Cerrar Cámara, WhatsApp, Instagram u otra app que use cámara.
+5. Usar el botón **Analizar foto** como respaldo.
 
-https://atilionetobr.github.io/inspector-parches/?v=17
+## Nota técnica
+
+Esta versión usa OpenCV.js para visión artificial y PeerJS/WebRTC para transmitir video y datos al monitor PC. Requiere internet para cargar esas librerías desde CDN.
