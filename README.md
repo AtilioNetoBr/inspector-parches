@@ -1,62 +1,62 @@
-# Inspector de Parches v15 Mobile First
+# Inspector de Parches v17 - Texto Centrado
 
-Versión enfocada en celular, con flujo ordenado y menos configuración visible.
+Versión enfocada en el criterio real de calidad:
+
+1. Texto centrado lo más cercano posible al 100%.
+2. Altura Base a Texto comparada contra la muestra maestra.
+
+## Qué conserva
+
+- Detector limpio estilo v9/v16 para encontrar el parche.
+- Ficha 7×7 / 5×5 solo para escala.
+- Maestro 100% para aprender zona, tamaño y Base a Texto.
+- Estado NO_MEDIBLE cuando no encuentra bien parche o texto.
 
 ## Qué cambia
 
-La lógica queda separada en cuatro pasos:
+El score ya no trata todo igual. Ahora la decisión se calcula así:
 
-1. **Calibrar ficha 7×7 / 5×5**
-   - Busca el exterior blanco 7×7.
-   - Corrige perspectiva.
-   - El 5×5 se calcula por geometría, no por threshold.
+- Centrado del texto: 70%
+- Base a Texto: 30%
+- Tamaño y área/perímetro: solo si se activan, como secundarios.
 
-2. **Capturar fondo vacío**
-   - Retira la ficha.
-   - No pongas parche.
-   - La app guarda cómo se ve la mesa/fondo.
+## Flujo
 
-3. **Guardar maestro 100%**
-   - Coloca una pieza buena.
-   - La app detecta el parche como objeto nuevo contra el fondo.
-   - Guarda silueta, tamaño, Base a Texto y zona de detección aprendida.
+1. Iniciar cámara.
+2. Colocar ficha 7×7 / 5×5.
+3. Calibrar ficha.
+4. Retirar ficha sin mover el celular.
+5. Colocar parche bueno.
+6. Guardar maestro 100%.
+7. Medir piezas.
 
-4. **Medir / auditar**
-   - Busca solo dentro de la zona aprendida del maestro.
-   - Compara contra maestro 100%.
-   - Puede devolver APROBADO, RECHAZADO o NO MEDIBLE.
+## Configuración recomendada
 
-## Archivos
+- Aceptación final: 85%
+- Centrado texto: 90%
+- Base-Texto: 85%
+- Error centro 0% mm: 5
+- Margen detector: 8 mm
+- Zona texto inicio: 45%
+- Zona texto fin: 94%
+- Validar tamaño: OFF al inicio
+- Validar área/perímetro: OFF al inicio
 
-Sube estos archivos sueltos a GitHub Pages:
+## Cómo interpretar
+
+- Centrado texto 100% = centro del bloque de texto coincide con centro del parche.
+- Base a Texto 100% = distancia del borde inferior del parche al borde inferior del texto igual a la maestra.
+- NO_MEDIBLE = no se encontró bien parche o texto; no es rechazo de pieza.
+
+## Archivos para GitHub Pages
+
+Subir sueltos a la raíz:
 
 - index.html
 - app.js
 - styles.css
 - README.md
 
-No subas el ZIP ni una carpeta envolvente.
+Abrir con:
 
-## URL recomendada
-
-```text
-https://atilionetobr.github.io/inspector-parches/?v=15
-```
-
-## Configuración inicial recomendada
-
-- Aceptación general: 85%
-- Base a Texto mínima: 85%
-- Margen detección: 8 mm
-- Texto desde: 45%
-- Texto hasta: 94%
-- Tamaño contra maestro: OFF al inicio
-- Área contra maestro: OFF al inicio
-
-## Recomendación física
-
-- iPhone fijo.
-- Fondo mate.
-- Luz uniforme.
-- Capturar fondo después de retirar ficha y antes de poner maestro.
-- Si se mueve el celular, repetir ficha + fondo + maestro.
+https://atilionetobr.github.io/inspector-parches/?v=17
