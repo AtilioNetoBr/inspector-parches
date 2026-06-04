@@ -1,4 +1,4 @@
-# Inspector de Parches Pro v9
+# Inspector de Parches Pro v10 iPhone Safe
 
 Webapp para iPhone + PC orientada a inspección visual de parches/bordados.
 
@@ -29,6 +29,7 @@ Sube estos archivos sueltos a la raíz del repositorio de GitHub Pages:
 ```text
 index.html
 app.js
+opencv-loader.js
 styles.css
 monitor.html
 monitor.js
@@ -41,13 +42,13 @@ No subas el ZIP y no subas una carpeta envolvente.
 ## URL de app
 
 ```text
-https://TUUSUARIO.github.io/inspector-parches/?v=9
+https://TUUSUARIO.github.io/inspector-parches/?v=10
 ```
 
 ## URL de monitor PC
 
 ```text
-https://TUUSUARIO.github.io/inspector-parches/monitor.html?v=9
+https://TUUSUARIO.github.io/inspector-parches/monitor.html?v=10
 ```
 
 ## Flujo recomendado
@@ -86,6 +87,20 @@ https://TUUSUARIO.github.io/inspector-parches/monitor.html?v=9
 Esta versión usa OpenCV.js para visión artificial y PeerJS/WebRTC para transmitir video y datos al monitor PC. Requiere internet para cargar esas librerías desde CDN.
 
 
-## Fix OpenCV v17.1
+## Cambios v10 iPhone Safe
 
-OpenCV ahora se carga desde `app.js` con varios CDN de respaldo. Abre la app con `?v=17.1` para evitar caché. Si aparece `OpenCV no cargó`, toca la etiqueta roja para reintentar.
+- Se eliminó la carga directa `async` de OpenCV desde `index.html`.
+- Se agregó `opencv-loader.js`, que espera a que OpenCV esté realmente inicializado antes de permitir mediciones.
+- El cargador prueba varias fuentes: `./opencv.js`, OpenCV oficial 4.10.0, OpenCV oficial 4.x y jsDelivr.
+- Recomendación profesional: descarga `opencv.js` y súbelo a la raíz del repositorio para no depender del CDN en Safari iPhone.
+- La cámara ahora espera `loadedmetadata` antes de capturar frames.
+- `localStorage` queda protegido con `try/catch` para que Safari no mate la app si bloquea almacenamiento.
+- Scripts y CSS llevan `?v=10.iphone-safe` para evitar caché vieja de GitHub Pages.
+
+## Prueba rápida en iPhone
+
+1. Abre la URL de GitHub Pages, no `github.com`.
+2. Espera a que diga **OpenCV listo**.
+3. Toca **Iniciar cámara**.
+4. Si OpenCV no carga con internet inestable, sube `opencv.js` local a la misma carpeta.
+5. Si Safari insiste en comportarse como impresora de oficina, borra datos del sitio: Ajustes → Safari → Avanzado → Datos de sitios web → tu dominio GitHub Pages.

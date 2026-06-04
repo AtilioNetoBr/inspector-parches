@@ -54,11 +54,13 @@ function renderPayload(p){
   $('decision').className='decision '+(p.pass?'ok':p.result==='RECHAZADO'?'bad':'neutral');
   $('reason').textContent=p.reason || '';
   $('mAlign').textContent=p.text?.alignmentScore!=null ? `${p.text.alignmentScore}%` : '--';
-  $('mSize').textContent=p.patch ? `${p.patch.widthCm.toFixed(2)} × ${p.patch.heightCm.toFixed(2)} cm` : '--';
-  $('mPerimeter').textContent=p.patch ? `${p.patch.perimeterCm.toFixed(2)} cm` : '--';
-  $('mArea').textContent=p.patch ? `${p.patch.areaCm2.toFixed(2)} cm²` : '--';
-  $('mOffset').textContent=p.text?.offsetMm!=null ? `${p.text.offsetMm.toFixed(1)} mm` : '--';
-  $('mAngle').textContent=p.text?.angleDeg!=null ? `${p.text.angleDeg.toFixed(1)}°` : '--';
+  const patch = p.patch || {};
+  const text = p.text || {};
+  $('mSize').textContent=Number.isFinite(patch.widthCm) && Number.isFinite(patch.heightCm) ? `${patch.widthCm.toFixed(2)} × ${patch.heightCm.toFixed(2)} cm` : '--';
+  $('mPerimeter').textContent=Number.isFinite(patch.perimeterCm) ? `${patch.perimeterCm.toFixed(2)} cm` : '--';
+  $('mArea').textContent=Number.isFinite(patch.areaCm2) ? `${patch.areaCm2.toFixed(2)} cm²` : '--';
+  $('mOffset').textContent=Number.isFinite(text.offsetMm) ? `${text.offsetMm.toFixed(1)} mm` : '--';
+  $('mAngle').textContent=Number.isFinite(text.angleDeg) ? `${text.angleDeg.toFixed(1)}°` : '--';
 }
 function drawOverlay(p){
   const cw=overlay.clientWidth, ch=overlay.clientHeight; ctx.clearRect(0,0,cw,ch);

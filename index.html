@@ -3,18 +3,21 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="format-detection" content="telephone=no" />
   <meta name="theme-color" content="#07101f" />
-  <title>Inspector de Parches Pro v17.1 | Mardur</title>
-  <link rel="stylesheet" href="styles.css" />
+  <title>Inspector de Parches Pro v10 iPhone Safe | Mardur</title>
+  <link rel="stylesheet" href="styles.css?v=10.iphone-safe" />
 </head>
 <body>
   <header class="app-header">
     <div>
-      <h1>Inspector de Parches Pro v17.1</h1>
-      <p>Tarjeta 7×7 / 5×5, silueta, perímetro, texto alineado y monitoreo PC por QR.</p>
+      <h1>Inspector de Parches Pro v10</h1>
+      <p>Tarjeta 7×7 / 5×5, silueta, perímetro, texto alineado y modo seguro para Safari iPhone.</p>
     </div>
     <div class="header-actions">
-      <span id="cvStatus" class="badge warn">OpenCV cargando…</span>
+      <span id="cvStatus" class="badge warn">OpenCV preparando…</span>
       <span id="cameraStatus" class="badge idle">Sin cámara</span>
       <span id="monitorStatus" class="badge idle">PC no conectado</span>
     </div>
@@ -180,6 +183,7 @@
   <div id="toast" class="toast"></div>
 
   <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
-  <script src="app.js?v=17.1"></script>
+  <script src="opencv-loader.js?v=10.iphone-safe"></script>
+  <script src="app.js?v=10.iphone-safe"></script>
 </body>
 </html>
