@@ -1,6 +1,5 @@
-/* Inspector de Parches Pro v9
-   Enfoque: tarjeta 7x7/5x5 -> perspectiva -> silueta -> bloque de texto -> monitor PC QR.
-   Sin OCR. El texto se mide como bloque visual. */
+/* Inspector de Parches Pro - OpenCV loader fix
+   Carga robusta de OpenCV.js con fallbacks. Sin OCR. */
 
 const $ = id => document.getElementById(id);
 const video = $('video');
@@ -33,6 +32,18 @@ let lastAnalysis = null;
 let lastDebug = {};
 
 const CARD = { OUTER_MM: 70, INNER_MM: 50, WARP_PX: 700, INNER_START: 100, INNER_END: 600 };
+
+// OpenCV.js es pesado y en iPhone/CDN a veces tarda o falla.
+// Lo cargamos desde app.js con varias fuentes, en vez de depender de un solo <script> en index.html.
+const OPENCV_URLS = [
+  'https://docs.opencv.org/4.x/opencv.js',
+  'https://docs.opencv.org/4.10.0/opencv.js',
+  'https://docs.opencv.org/4.9.0/opencv.js',
+  'https://docs.opencv.org/4.8.0/opencv.js',
+  'https://cdn.jsdelivr.net/npm/@techstark/opencv-js@4.10.0-release.1/dist/opencv.js',
+  'https://cdn.jsdelivr.net/npm/@techstark/opencv-js@4.9.0-release.1/dist/opencv.js'
+];
+let cvLoadPromise = null;
 
 init();
 
@@ -67,6 +78,11 @@ function bindUI(){
   $('btnConnectMonitor').onclick = connectMonitor;
   $('btnReconnectMonitor').onclick = connectMonitor;
   $('fileInput').onchange = handleFileInput;
+  $('cvStatus').onclick = () => {
+    window.__cvReady = false;
+    cvLoadPromise = null;
+    waitForOpenCV(true);
+  };
 }
 
 function safeParse(txt, fallback){ try{return txt?JSON.parse(txt):fallback;}catch{return fallback;} }
@@ -87,17 +103,145 @@ function cfg(){ return {
   chkArea:$('chkArea').checked
 };}
 
-async function waitForOpenCV(){
-  const start = Date.now();
-  const timer = setInterval(()=>{
-    if(window.cv && typeof cv.Mat === 'function' && typeof cv.imread === 'function'){
-      clearInterval(timer); setBadge('cvStatus','OpenCV listo','ok'); toast('Motor de visión listo');
-    } else if(Date.now()-start>15000){
-      clearInterval(timer); setBadge('cvStatus','OpenCV no cargó','bad'); toast('OpenCV no cargó. Revisa internet o recarga.');
-    }
-  },250);
+async function waitForOpenCV(force=false){
+  if(force){
+    setBadge('cvStatus','Reintentando OpenCV…','warn');
+    toast('Reintentando motor de visión…');
+  }
+  try{
+    await loadOpenCV();
+    setBadge('cvStatus','OpenCV listo','ok');
+    toast('Motor de visión listo');
+  }catch(e){
+    console.error('OpenCV no cargó:', e);
+    setBadge('cvStatus','OpenCV no cargó','bad');
+    toast('OpenCV no cargó. Toca la etiqueta roja para reintentar.');
+  }
 }
-function cvReady(){ return window.cv && typeof cv.Mat === 'function' && typeof cv.imread === 'function'; }
+
+function cvReady(){
+  return !!(window.__cvReady && window.cv && typeof window.cv.Mat === 'function' && typeof window.cv.imread === 'function');
+}
+
+function loadOpenCV(){
+  if(cvReady()) return Promise.resolve(window.cv);
+  if(cvLoadPromise) return cvLoadPromise;
+  cvLoadPromise = (async () => {
+    // Si otro script ya dejó cv en ventana, esperamos su runtime.
+    if(window.cv) return await waitForCVRuntime('OpenCV existente');
+
+    let lastError = null;
+    for(let i=0; i<OPENCV_URLS.length; i++){
+      const url = OPENCV_URLS[i];
+      try{
+        setBadge('cvStatus',`OpenCV ${i+1}/${OPENCV_URLS.length}`,'warn');
+        await injectOpenCVScript(url, i);
+        return window.cv;
+      }catch(e){
+        lastError = e;
+        console.warn('Falló OpenCV:', url, e);
+        removeOpenCVScripts();
+        // Algunos builds dejan un cv incompleto. Lo limpiamos para probar otro CDN.
+        if(!cvReady()){
+          try{ delete window.cv; }catch(_){ window.cv = undefined; }
+          window.__cvReady = false;
+        }
+      }
+    }
+    throw lastError || new Error('No se pudo cargar ningún OpenCV.js');
+  })();
+  return cvLoadPromise;
+}
+
+function injectOpenCVScript(url, index){
+  return new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = url;
+    script.async = true;
+    script.defer = true;
+    script.crossOrigin = 'anonymous';
+    script.dataset.opencvLoader = 'true';
+
+    let settled = false;
+    const finish = (ok, value) => {
+      if(settled) return;
+      settled = true;
+      clearTimeout(timer);
+      ok ? resolve(value) : reject(value);
+    };
+
+    const timer = setTimeout(() => {
+      finish(false, new Error(`Timeout cargando OpenCV desde ${url}`));
+    }, 45000);
+
+    script.onerror = () => finish(false, new Error(`No se pudo descargar ${url}`));
+    script.onload = async () => {
+      try{
+        const cvModule = await waitForCVRuntime(url);
+        finish(true, cvModule);
+      }catch(e){
+        finish(false, e);
+      }
+    };
+
+    document.head.appendChild(script);
+  });
+}
+
+function waitForCVRuntime(sourceLabel){
+  return new Promise((resolve, reject) => {
+    const started = Date.now();
+    const timeoutMs = 45000;
+
+    const done = (cvModule) => {
+      window.cv = cvModule || window.cv;
+      window.__cvReady = true;
+      resolve(window.cv);
+    };
+
+    const check = () => {
+      try{
+        if(window.cv && typeof window.cv.then === 'function'){
+          window.cv.then(done).catch(reject);
+          return true;
+        }
+        if(window.cv && typeof window.cv.Mat === 'function' && typeof window.cv.imread === 'function'){
+          done(window.cv);
+          return true;
+        }
+        if(window.cv && typeof window.cv === 'object'){
+          const previous = window.cv.onRuntimeInitialized;
+          window.cv.onRuntimeInitialized = function(){
+            if(typeof previous === 'function'){
+              try{ previous(); }catch(e){ console.warn(e); }
+            }
+            done(window.cv);
+          };
+        }
+      }catch(e){
+        reject(e);
+        return true;
+      }
+      return false;
+    };
+
+    if(check()) return;
+    const interval = setInterval(() => {
+      if(check()){
+        clearInterval(interval);
+        return;
+      }
+      if(Date.now() - started > timeoutMs){
+        clearInterval(interval);
+        reject(new Error(`OpenCV descargó pero no inicializó: ${sourceLabel}`));
+      }
+    }, 250);
+  });
+}
+
+function removeOpenCVScripts(){
+  document.querySelectorAll('script[data-opencv-loader="true"]').forEach(s => s.remove());
+}
 
 async function startCamera(deviceId=null){
   if(stream) stopStream();

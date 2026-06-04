@@ -84,3 +84,8 @@ https://TUUSUARIO.github.io/inspector-parches/monitor.html?v=9
 ## Nota técnica
 
 Esta versión usa OpenCV.js para visión artificial y PeerJS/WebRTC para transmitir video y datos al monitor PC. Requiere internet para cargar esas librerías desde CDN.
+
+
+## Fix OpenCV v17.1
+
+OpenCV ahora se carga desde `app.js` con varios CDN de respaldo. Abre la app con `?v=17.1` para evitar caché. Si aparece `OpenCV no cargó`, toca la etiqueta roja para reintentar.
