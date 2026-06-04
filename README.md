@@ -1,60 +1,62 @@
-# Inspector de Parches v14 Senior - Marco 7x7 / 5x5 geométrico + Base a Texto
+# Inspector de Parches v15 Mobile First
 
-Versión sin monitor y sin QR.
+Versión enfocada en celular, con flujo ordenado y menos configuración visible.
 
-## Mejora principal
+## Qué cambia
 
-Esta versión corrige la lógica de ingeniería:
+La lógica queda separada en cuatro pasos:
 
-- El threshold se usa para detectar el **exterior blanco 7x7**.
-- El 5x5 **no se mide por threshold**.
-- El 5x5 se proyecta por geometría exacta dentro del 7x7:
-  - Exterior: 70 mm
-  - Interior: 50 mm
-  - Borde: 10 mm por lado
-- El contraste del centro solo valida que realmente hay una zona más oscura.
-- La calibración guarda también homografía imagen → milímetros para medir en el plano real, no solo px/mm.
+1. **Calibrar ficha 7×7 / 5×5**
+   - Busca el exterior blanco 7×7.
+   - Corrige perspectiva.
+   - El 5×5 se calcula por geometría, no por threshold.
 
-## Flujo recomendado
+2. **Capturar fondo vacío**
+   - Retira la ficha.
+   - No pongas parche.
+   - La app guarda cómo se ve la mesa/fondo.
 
-1. Iniciar cámara.
-2. Colocar la ficha/marco 7x7 / 5x5 en la zona de medición.
-3. Presionar **Calibrar marco 7x7 / 5x5**.
-4. Esperar **FICHA OK**.
-5. Retirar la ficha sin mover el celular.
-6. Colocar una pieza aprobada.
-7. Presionar **Guardar maestro 100%**.
-8. Medir piezas con **Medir ahora** o **Auto: ON**.
+3. **Guardar maestro 100%**
+   - Coloca una pieza buena.
+   - La app detecta el parche como objeto nuevo contra el fondo.
+   - Guarda silueta, tamaño, Base a Texto y zona de detección aprendida.
 
-## Qué mide
+4. **Medir / auditar**
+   - Busca solo dentro de la zona aprendida del maestro.
+   - Compara contra maestro 100%.
+   - Puede devolver APROBADO, RECHAZADO o NO MEDIBLE.
 
-- Ancho.
-- Alto.
-- Giro.
-- Área.
-- Distancia Base a Texto.
-- % contra maestro 100%.
+## Archivos
 
-## Mejoras técnicas v14
-
-- Detector de ficha por jerarquía de contornos para priorizar marco exterior.
-- 5x5 dibujado por geometría exacta, no por detección de manchas.
-- Validación de contraste centro/borde.
-- Overlay corregido con `object-fit: contain` para que las líneas no se desplacen.
-- Detección de parche priorizando máscara de objeto claro sobre fondo oscuro.
-- Canny queda solo como respaldo, no como método principal.
-- Medición de parche usando homografía cuando existe calibración de ficha.
-- Base a Texto calculada con escala vertical real del parche enderezado.
-
-## Archivos a subir a GitHub
-
-Subir sueltos en la raíz del repositorio:
+Sube estos archivos sueltos a GitHub Pages:
 
 - index.html
 - app.js
 - styles.css
 - README.md
 
-Abrir con:
+No subas el ZIP ni una carpeta envolvente.
 
-https://atilionetobr.github.io/inspector-parches/?v=14
+## URL recomendada
+
+```text
+https://atilionetobr.github.io/inspector-parches/?v=15
+```
+
+## Configuración inicial recomendada
+
+- Aceptación general: 85%
+- Base a Texto mínima: 85%
+- Margen detección: 8 mm
+- Texto desde: 45%
+- Texto hasta: 94%
+- Tamaño contra maestro: OFF al inicio
+- Área contra maestro: OFF al inicio
+
+## Recomendación física
+
+- iPhone fijo.
+- Fondo mate.
+- Luz uniforme.
+- Capturar fondo después de retirar ficha y antes de poner maestro.
+- Si se mueve el celular, repetir ficha + fondo + maestro.

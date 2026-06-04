@@ -3,155 +3,106 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <title>Inspector de Parches | Ficha 7x7 / 5x5 + Base a Texto</title>
+  <meta name="theme-color" content="#07101f" />
+  <title>Inspector de Parches v15</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-  <header class="app-header">
+  <header class="topbar">
     <div>
       <h1>Inspector de Parches</h1>
-      <p>Medición con celular, marco 7×7 / 5×5 geométrico, maestro 100%, distancia Base a Texto y decisión automática.</p>
+      <p>Mobile first · ficha 7×7/5×5 · fondo · maestro 100% · Base a Texto</p>
     </div>
-    <span id="statusBadge" class="badge idle">Sin cámara</span>
+    <div class="badges">
+      <span id="cvBadge" class="badge warn">OpenCV cargando</span>
+      <span id="cameraBadge" class="badge idle">Sin cámara</span>
+    </div>
   </header>
 
-  <main class="layout">
-    <section class="camera-panel card">
-      <div class="video-wrap">
-        <video id="video" playsinline autoplay muted></video>
+  <main class="app">
+    <section class="viewer card">
+      <div class="videoBox" id="videoBox">
+        <video id="video" autoplay playsinline muted></video>
         <canvas id="overlay"></canvas>
-        <canvas id="captureCanvas" hidden></canvas>
-        <canvas id="patchCanvas" hidden></canvas>
-        <div id="centerGuide" class="center-guide"></div>
+        <canvas id="capture" hidden></canvas>
+        <canvas id="backgroundCanvas" hidden></canvas>
+        <div class="stageMessage" id="stageMessage">
+          <strong>Listo para empezar</strong>
+          <span>Inicia cámara. Luego sigue los 4 pasos en orden.</span>
+        </div>
       </div>
-
-      <div class="controls">
+      <div class="cameraControls">
         <button id="btnStart" class="primary">Iniciar cámara</button>
-        <button id="btnCardCalibrate" class="secondary">1. Calibrar marco 7×7 / 5×5</button>
-        <button id="btnMeasure">Medir ahora</button>
-        <button id="btnAuto" data-active="false">Auto: OFF</button>
-        <button id="btnSaveMaster" class="secondary">Guardar maestro 100%</button>
-        <button id="btnClearMaster" class="danger">Borrar maestro</button>
-      </div>
-
-      <div class="hint">
-        Flujo: 1) coloca la ficha blanca 7×7 con negro 5×5 y calibra; 2) retira la ficha sin mover el celular; 3) coloca pieza buena y guarda maestro 100%.
+        <button id="btnSwitch">Cambiar cámara</button>
+        <label class="fileBtn">Analizar foto<input id="fileInput" type="file" accept="image/*" capture="environment" hidden /></label>
       </div>
     </section>
 
-    <aside class="side-panel">
-      <section class="card result-card">
-        <h2>Resultado</h2>
+    <section class="steps">
+      <button id="btnCalCard" class="stepCard">
+        <span>1</span><strong>Calibrar ficha</strong><small>7×7 / 5×5</small>
+      </button>
+      <button id="btnCaptureBg" class="stepCard">
+        <span>2</span><strong>Capturar fondo</strong><small>sin ficha ni parche</small>
+      </button>
+      <button id="btnSaveMaster" class="stepCard">
+        <span>3</span><strong>Guardar maestro</strong><small>pieza buena = 100%</small>
+      </button>
+      <button id="btnMeasure" class="stepCard primaryStep">
+        <span>4</span><strong>Medir</strong><small>auditar pieza</small>
+      </button>
+    </section>
+
+    <section class="result card">
+      <div class="resultHead">
         <div id="decision" class="decision neutral">ESPERANDO</div>
-        <div class="metrics">
-          <div><span>Ancho</span><strong id="mWidth">--</strong></div>
-          <div><span>Alto</span><strong id="mHeight">--</strong></div>
-          <div><span>Giro</span><strong id="mAngle">--</strong></div>
-          <div><span>Área</span><strong id="mArea">--</strong></div>
-          <div><span>Base a Texto</span><strong id="mBaseText">--</strong></div>
-          <div><span>% vs maestro</span><strong id="mScore">--</strong></div>
-        </div>
-        <p id="reason" class="reason">Inicia la cámara, calibra y guarda un maestro.</p>
-      </section>
+        <button id="btnAuto" data-active="false">Auto OFF</button>
+      </div>
+      <p id="reason" class="reason">Sin medición todavía.</p>
+      <div class="metrics">
+        <div><span>Score</span><strong id="mScore">--</strong></div>
+        <div><span>Base a Texto</span><strong id="mBase">--</strong></div>
+        <div><span>Tamaño</span><strong id="mSize">--</strong></div>
+        <div><span>Área</span><strong id="mArea">--</strong></div>
+      </div>
+    </section>
 
-      <section class="card ficha-card">
-        <h2>Ficha de escala 7×7 / 5×5</h2>
-        <p class="small">Primero se busca el exterior blanco 7×7, se corrige perspectiva y se valida el negro 5×5. Esto solo calibra escala; no rechaza piezas.</p>
-        <div class="master-grid">
-          <div><span>Ficha</span><strong id="cardState">No calibrada</strong></div>
-          <div><span>Confianza</span><strong id="cardConfidence">--</strong></div>
-          <div><span>Negro detectado</span><strong id="cardInner">--</strong></div>
-          <div><span>Escala ficha</span><strong id="cardScale">--</strong></div>
-        </div>
-        <div class="controls stack">
-          <button id="btnCardCalibrateSide" class="secondary">Calibrar marco 7×7 / hueco 5×5</button>
-          <button id="btnClearCard" class="danger">Borrar ficha/escala</button>
-        </div>
-      </section>
+    <section class="statusGrid">
+      <div class="statusCard"><span>Ficha</span><strong id="stateCard">Pendiente</strong></div>
+      <div class="statusCard"><span>Fondo</span><strong id="stateBg">Pendiente</strong></div>
+      <div class="statusCard"><span>Maestro</span><strong id="stateMaster">Pendiente</strong></div>
+      <div class="statusCard"><span>Auto</span><strong id="stateAuto">OFF</strong></div>
+    </section>
 
-      <section class="card">
-        <h2>Maestro 100%</h2>
-        <p id="masterText" class="small">Maestro: no guardado.</p>
-        <div class="master-grid">
-          <div><span>Ancho ref.</span><strong id="refWidth">--</strong></div>
-          <div><span>Alto ref.</span><strong id="refHeight">--</strong></div>
-          <div><span>Base a Texto ref.</span><strong id="refBaseText">--</strong></div>
-          <div><span>Área ref.</span><strong id="refArea">--</strong></div>
-        </div>
-      </section>
+    <details class="card config" id="configBox">
+      <summary>Configuración</summary>
+      <div class="configGrid">
+        <label>Lote<input id="lot" value="Hidalgo" /></label>
+        <label>Aceptación general %<input id="minScore" type="number" value="85" min="1" max="100" step="1" /></label>
+        <label>Base a Texto mínima %<input id="minBaseScore" type="number" value="85" min="1" max="100" step="1" /></label>
+        <label>Margen detección mm<input id="detectMarginMm" type="number" value="8" min="1" step="1" /></label>
+        <label>Texto desde % alto<input id="textStart" type="number" value="45" min="0" max="95" step="1" /></label>
+        <label>Texto hasta % alto<input id="textEnd" type="number" value="94" min="5" max="100" step="1" /></label>
+      </div>
+      <div class="toggles">
+        <label><input id="useSize" type="checkbox" /> tamaño contra maestro</label>
+        <label><input id="useArea" type="checkbox" /> área contra maestro</label>
+      </div>
+      <div class="dangerRow">
+        <button id="btnClearAll" class="danger">Borrar todo</button>
+      </div>
+    </details>
 
-      <section class="card">
-        <h2>Configuración</h2>
-        <label>Lote / referencia
-          <input id="lotName" value="Hidalgo" />
-        </label>
-        <div class="grid2">
-          <label>Ancho objetivo mm
-            <input id="targetW" type="number" value="65" step="0.1" />
-          </label>
-          <label>Alto objetivo mm
-            <input id="targetH" type="number" value="73" step="0.1" />
-          </label>
-          <label>Tolerancia ancho ±mm
-            <input id="tolW" type="number" value="1.5" step="0.1" />
-          </label>
-          <label>Tolerancia alto ±mm
-            <input id="tolH" type="number" value="1.5" step="0.1" />
-          </label>
-          <label>Giro máximo °
-            <input id="tolAngle" type="number" value="18" step="0.5" />
-          </label>
-          <label>Referencia mm
-            <input id="refMm" type="number" value="50" step="1" />
-          </label>
-          <label>Aceptación general %
-            <input id="acceptPct" type="number" value="85" min="1" max="100" step="1" />
-          </label>
-          <label>Aceptación Base a Texto %
-            <input id="baseTextAcceptPct" type="number" value="85" min="1" max="100" step="1" />
-          </label>
-          <label>Zona texto inicia % alto
-            <input id="textStartPct" type="number" value="42" min="0" max="95" step="1" />
-          </label>
-          <label>Zona texto termina % alto
-            <input id="textEndPct" type="number" value="92" min="5" max="100" step="1" />
-          </label>
-        </div>
-        <label class="checkline"><input id="useMaster" type="checkbox" checked /> Usar maestro como 100% para aprobación</label>
-        <button id="btnCalibrate" class="secondary">Calibración manual 2 puntos</button>
-        <p id="scaleText" class="small">Escala: no calibrada. Recomendado: calibrar con ficha 7×7 / 5×5.</p>
-      </section>
-
-      <section class="card">
-        <h2>Conteo</h2>
-        <div class="counter">
-          <div><span>Aprobados</span><strong id="okCount">0</strong></div>
-          <div><span>Rechazados</span><strong id="badCount">0</strong></div>
-          <div><span>Total</span><strong id="totalCount">0</strong></div>
-        </div>
-        <div class="controls stack">
-          <button id="btnExport">Exportar CSV</button>
-          <button id="btnReset" class="danger">Reiniciar conteo</button>
-        </div>
-      </section>
-    </aside>
+    <section class="card logCard">
+      <div class="logHead"><h2>Historial</h2><button id="btnExport">CSV</button></div>
+      <div class="counts"><span>OK <b id="okCount">0</b></span><span>Rechazo <b id="badCount">0</b></span><span>No medible <b id="nmCount">0</b></span></div>
+      <div class="tableWrap"><table><thead><tr><th>Hora</th><th>Resultado</th><th>Score</th><th>Base</th><th>Motivo</th></tr></thead><tbody id="logBody"></tbody></table></div>
+    </section>
   </main>
-
-  <section class="card log-card">
-    <h2>Historial</h2>
-    <div class="table-wrap">
-      <table>
-        <thead>
-          <tr><th>Hora</th><th>Lote</th><th>Resultado</th><th>Ancho</th><th>Alto</th><th>Base-Texto</th><th>%</th><th>Motivo</th></tr>
-        </thead>
-        <tbody id="logBody"></tbody>
-      </table>
-    </div>
-  </section>
 
   <div id="toast" class="toast"></div>
 
-  <script async src="https://docs.opencv.org/4.x/opencv.js" onload="window.cvReady=true"></script>
+  <script async src="https://docs.opencv.org/4.x/opencv.js" onload="window.__opencvLoaded=true"></script>
   <script src="app.js"></script>
 </body>
 </html>
